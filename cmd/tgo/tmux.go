@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"os/exec"
 	"sort"
@@ -148,16 +147,4 @@ func assignHotkeys(favorites []session, others []session, alphabet string) map[s
 		out[s.Name] = runes[i]
 	}
 	return out
-}
-
-func runesToString(m map[string]rune, ordered []session) string {
-	buf := bytes.Buffer{}
-	for _, s := range ordered {
-		r, ok := m[s.Name]
-		if !ok {
-			continue
-		}
-		buf.WriteRune(r)
-	}
-	return buf.String()
 }

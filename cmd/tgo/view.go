@@ -31,7 +31,7 @@ func (a *app) draw(screen tcell.Screen) {
 	}
 
 	line = a.drawSection(screen, line, width, height, "Favorites", a.favorites, a.cursorFav, a.section == 0)
-	line = a.drawSection(screen, line, width, height, "Others", a.others, a.cursorOther, a.section == 1)
+	a.drawSection(screen, line, width, height, "Others", a.others, a.cursorOther, a.section == 1)
 
 	status := a.visibleStatus()
 	if status != "" {
