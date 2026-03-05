@@ -17,11 +17,41 @@ func (a *app) draw(screen tcell.Screen) {
 	errorStyle := tcell.StyleDefault.Foreground(tcell.ColorRed)
 
 	line := 0
-	a.drawText(screen, 0, line, headerStyle, "tgo - tmux session switcher")
+	previewAllHotkeys := a.reorderPreviewHotkeys()
+	previewFavHotkeys := a.reorderPreviewFavoriteHotkeys()
+	previewFavorites, previewOthers := a.reorderPreviewSections()
+	baseAllHotkeys := a.hotkeys
+	baseFavHotkeys := a.favKeys
+	if a.mode == modeReorder && a.reorderBase != nil {
+		baseAllHotkeys = a.reorderBase
+	}
+	if a.mode == modeReorder && a.reorderBaseF != nil {
+		baseFavHotkeys = a.reorderBaseF
+	}
+
+	styleTag := "push"
+	if a.reorderStyle == reorderSwap {
+		styleTag = "swap"
+	}
+	a.drawText(screen, 0, line, headerStyle, fmt.Sprintf("tgo - tmux session switcher  [reorder:%s]", styleTag))
 	line++
 
-	help := "[letters] switch  [j/k or arrows] move  [tab] section  [space] reorder  [f] favorite  [n] new  [x] kill  [r] refresh  [enter] switch  [esc/ctrl+c] quit"
-	a.drawText(screen, 0, line, helpStyle, truncate(help, width))
+	var help string
+	var helpLineStyle tcell.Style
+	switch a.mode {
+	case modeReorder:
+		if a.reorderStyle == reorderPush {
+			help = "PUSH MODE  [j/k/↑↓] move  [space/enter] place  [m] mode  [esc] cancel"
+			helpLineStyle = tcell.StyleDefault.Foreground(tcell.ColorYellow).Bold(true)
+		} else {
+			help = "SWAP MODE  [j/k/↑↓] navigate target  [space/enter] swap  [m] mode  [esc] cancel"
+			helpLineStyle = tcell.StyleDefault.Foreground(tcell.ColorTeal).Bold(true)
+		}
+	default:
+		help = "[letters] all  [ctrl+letters] favorite  [j/k] move  [tab] section  [space] reorder  [m] cycle-mode  [.] fav  [Shift+K] kill  [l] refresh  [enter] switch  [esc/ctrl+c] quit"
+		helpLineStyle = helpStyle
+	}
+	a.drawText(screen, 0, line, helpLineStyle, truncate(help, width))
 	line++
 
 	if a.mode == modeCreate {
@@ -30,8 +60,8 @@ func (a *app) draw(screen tcell.Screen) {
 		line++
 	}
 
-	line = a.drawSection(screen, line, width, height, "Favorites", a.favorites, a.cursorFav, a.section == 0)
-	a.drawSection(screen, line, width, height, "Others", a.others, a.cursorOther, a.section == 1)
+	line = a.drawSection(screen, line, width, height, "Favorites", previewFavorites, a.cursorFav, a.section == 0, previewFavHotkeys, baseFavHotkeys, true)
+	a.drawSection(screen, line, width, height, "All", previewOthers, a.cursorOther, a.section == 1, previewAllHotkeys, baseAllHotkeys, false)
 
 	status := a.visibleStatus()
 	if status != "" {
@@ -45,7 +75,7 @@ func (a *app) draw(screen tcell.Screen) {
 	screen.Show()
 }
 
-func (a *app) drawSection(screen tcell.Screen, y int, width int, height int, title string, rows []session, cursor int, active bool) int {
+func (a *app) drawSection(screen tcell.Screen, y int, width int, height int, title string, rows []session, cursor int, active bool, previewHotkeys map[string]rune, baseHotkeys map[string]rune, ctrlHotkeys bool) int {
 	if y >= height-1 {
 		return y
 	}
@@ -71,6 +101,7 @@ func (a *app) drawSection(screen tcell.Screen, y int, width int, height int, tit
 		start = cursor - available + 1
 	}
 	end := min(start+available, len(rows))
+	swapTargetName, hasSwapTarget := a.selectedName()
 
 	for i := start; i < end; i++ {
 		if y >= height-1 {
@@ -78,8 +109,24 @@ func (a *app) drawSection(screen tcell.Screen, y int, width int, height int, tit
 		}
 		s := rows[i]
 		keyLabel := " "
-		if r, ok := a.hotkeys[s.Name]; ok {
-			keyLabel = string(r)
+		if r, ok := previewHotkeys[s.Name]; ok {
+			if ctrlHotkeys {
+				keyLabel = "^" + string(r)
+			} else {
+				keyLabel = string(r)
+			}
+		}
+		keyChangeLabel := ""
+		if a.mode == modeReorder {
+			if before, ok := baseHotkeys[s.Name]; ok {
+				beforeLabel := string(before)
+				if ctrlHotkeys {
+					beforeLabel = "^" + beforeLabel
+				}
+				if beforeLabel != keyLabel {
+					keyChangeLabel = fmt.Sprintf(" ~%s→%s", beforeLabel, keyLabel)
+				}
+			}
 		}
 		attached := " "
 		if s.Attached {
@@ -87,14 +134,37 @@ func (a *app) drawSection(screen tcell.Screen, y int, width int, height int, tit
 		}
 		prefix := "  "
 		style := tcell.StyleDefault
-		if i == cursor && active {
+
+		inReorder := a.mode == modeReorder && active
+		isPickedUp := inReorder && a.reorderStyle == reorderSwap && s.Name == a.pickupName
+		isSwapTarget := inReorder && a.reorderStyle == reorderSwap && hasSwapTarget && s.Name == swapTargetName && s.Name != a.pickupName
+		actionLabel := ""
+
+		switch {
+		case isPickedUp:
+			// The session being held — yellow, floats visually at its current slot.
+			style = tcell.StyleDefault.Background(tcell.ColorYellow).Foreground(tcell.ColorBlack)
+			prefix = "↑ "
+			actionLabel = " (picked)"
+		case isSwapTarget:
+			// The session that will be swapped with the picked-up one.
+			style = tcell.StyleDefault.Background(tcell.ColorTeal).Foreground(tcell.ColorBlack)
+			prefix = "↓ "
+			actionLabel = " (target)"
+		case i == cursor && active && a.mode == modeReorder && a.reorderStyle == reorderPush:
+			// Push mode — show the session being moved in yellow.
+			style = tcell.StyleDefault.Background(tcell.ColorYellow).Foreground(tcell.ColorBlack)
 			prefix = "> "
-			style = style.Background(tcell.ColorGray).Foreground(tcell.ColorBlack)
+			actionLabel = " (moving)"
+		case i == cursor && active:
+			style = tcell.StyleDefault.Background(tcell.ColorGray).Foreground(tcell.ColorBlack)
+			prefix = "> "
 		}
-		if a.mode == modeReorder && i == cursor && active {
-			style = style.Background(tcell.ColorYellow).Foreground(tcell.ColorBlack)
+		if keyChangeLabel != "" && !(i == cursor && active) {
+			style = style.Foreground(tcell.NewRGBColor(130, 150, 160))
 		}
-		row := fmt.Sprintf("%s[%s] %s %s", prefix, keyLabel, attached, s.Name)
+
+		row := fmt.Sprintf("%s[%s] %s %s%s%s", prefix, keyLabel, attached, s.Name, keyChangeLabel, actionLabel)
 		a.drawText(screen, 0, y, style, truncate(row, width))
 		y++
 	}
