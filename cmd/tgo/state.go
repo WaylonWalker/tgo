@@ -9,8 +9,9 @@ import (
 )
 
 type state struct {
-	Favorites []string `json:"favorites"`
-	Order     []string `json:"order"`
+	Favorites     []string          `json:"favorites"`
+	FavoriteRoots map[string]string `json:"favorite_roots,omitempty"`
+	Order         []string          `json:"order"`
 }
 
 type stateStore struct {
@@ -59,27 +60,51 @@ func (s *stateStore) Save(st state) error {
 }
 
 func normalizeState(st state, sessions []session) state {
+	st.Favorites = dedupe(st.Favorites)
+	if st.FavoriteRoots == nil {
+		st.FavoriteRoots = map[string]string{}
+	}
+	for name := range st.FavoriteRoots {
+		if indexOf(st.Favorites, name) < 0 {
+			delete(st.FavoriteRoots, name)
+		}
+	}
+
 	exists := make(map[string]struct{}, len(sessions))
 	for _, s := range sessions {
 		exists[s.Name] = struct{}{}
 	}
+	st.Order = dedupeAndFilter(st.Order, exists)
 
-	st.Favorites = dedupeAndFilter(st.Favorites, exists)
-
-	favSet := make(map[string]struct{}, len(st.Favorites))
-	for _, name := range st.Favorites {
-		favSet[name] = struct{}{}
+	// Append new sessions at the bottom so existing hotkey bindings are not displaced.
+	inOrder := make(map[string]struct{}, len(st.Order))
+	for _, name := range st.Order {
+		inOrder[name] = struct{}{}
+	}
+	for _, s := range sessions {
+		if _, exists := inOrder[s.Name]; !exists {
+			st.Order = append(st.Order, s.Name)
+			inOrder[s.Name] = struct{}{}
+		}
 	}
 
-	allowedOthers := make(map[string]struct{}, len(sessions)-len(st.Favorites))
-	for _, s := range sessions {
-		if _, fav := favSet[s.Name]; fav {
+	return st
+}
+
+func dedupe(items []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if item == "" {
 			continue
 		}
-		allowedOthers[s.Name] = struct{}{}
+		if _, dup := seen[item]; dup {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
 	}
-	st.Order = dedupeAndFilter(st.Order, allowedOthers)
-	return st
+	return out
 }
 
 func dedupeAndFilter(items []string, allowed map[string]struct{}) []string {

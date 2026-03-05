@@ -10,6 +10,7 @@ import (
 type session struct {
 	Name     string
 	Attached bool
+	RootDir  string
 }
 
 type tmuxClient interface {
@@ -17,12 +18,13 @@ type tmuxClient interface {
 	SwitchSession(name string) error
 	KillSession(name string) error
 	NewSession(name string) error
+	NewSessionAt(name string, rootDir string) error
 }
 
 type tmuxCLI struct{}
 
 func (t *tmuxCLI) ListSessions() ([]session, error) {
-	cmd := exec.Command("tmux", "list-sessions", "-F", "#{session_name}|#{?session_attached,1,0}")
+	cmd := exec.Command("tmux", "list-sessions", "-F", "#{session_name}|#{?session_attached,1,0}|#{session_path}")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)
@@ -35,13 +37,14 @@ func (t *tmuxCLI) ListSessions() ([]session, error) {
 
 	sessions := make([]session, 0, len(lines))
 	for _, line := range lines {
-		parts := strings.SplitN(line, "|", 2)
-		if len(parts) != 2 {
+		parts := strings.SplitN(line, "|", 3)
+		if len(parts) != 3 {
 			continue
 		}
 		sessions = append(sessions, session{
 			Name:     parts[0],
 			Attached: parts[1] == "1",
+			RootDir:  parts[2],
 		})
 	}
 
@@ -71,10 +74,18 @@ func (t *tmuxCLI) KillSession(name string) error {
 }
 
 func (t *tmuxCLI) NewSession(name string) error {
+	return t.NewSessionAt(name, "")
+}
+
+func (t *tmuxCLI) NewSessionAt(name string, rootDir string) error {
 	if name == "" {
 		return fmt.Errorf("empty session name")
 	}
-	cmd := exec.Command("tmux", "new-session", "-d", "-s", name)
+	args := []string{"new-session", "-d", "-s", name}
+	if rootDir != "" {
+		args = append(args, "-c", rootDir)
+	}
+	cmd := exec.Command("tmux", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("new session %q: %w (%s)", name, err, strings.TrimSpace(string(out)))
 	}
@@ -97,27 +108,16 @@ func orderSessions(sessions []session, st state) (favorites []session, others []
 		favorites = append(favorites, s)
 	}
 
-	favSet := make(map[string]struct{}, len(favorites))
-	for _, s := range favorites {
-		favSet[s.Name] = struct{}{}
-	}
-
-	nonFav := make([]session, 0, len(sessions)-len(favorites))
-	for _, s := range sessions {
-		if _, ok := favSet[s.Name]; ok {
-			continue
-		}
-		nonFav = append(nonFav, s)
-	}
+	all := append([]session(nil), sessions...)
 
 	orderIndex := make(map[string]int, len(st.Order))
 	for i, name := range st.Order {
 		orderIndex[name] = i
 	}
 
-	sort.SliceStable(nonFav, func(i, j int) bool {
-		li, iok := orderIndex[nonFav[i].Name]
-		lj, jok := orderIndex[nonFav[j].Name]
+	sort.SliceStable(all, func(i, j int) bool {
+		li, iok := orderIndex[all[i].Name]
+		lj, jok := orderIndex[all[j].Name]
 		switch {
 		case iok && jok:
 			return li < lj
@@ -126,21 +126,17 @@ func orderSessions(sessions []session, st state) (favorites []session, others []
 		case jok:
 			return false
 		default:
-			return tmuxOrder[nonFav[i].Name] < tmuxOrder[nonFav[j].Name]
+			return tmuxOrder[all[i].Name] < tmuxOrder[all[j].Name]
 		}
 	})
 
-	return favorites, nonFav
+	return favorites, all
 }
 
-func assignHotkeys(favorites []session, others []session, alphabet string) map[string]rune {
+func assignHotkeys(rows []session, alphabet string) map[string]rune {
 	out := make(map[string]rune)
-	ordered := make([]session, 0, len(favorites)+len(others))
-	ordered = append(ordered, favorites...)
-	ordered = append(ordered, others...)
-
 	runes := []rune(alphabet)
-	for i, s := range ordered {
+	for i, s := range rows {
 		if i >= len(runes) {
 			break
 		}

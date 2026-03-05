@@ -12,10 +12,11 @@ The core flow is two keystrokes:
 ## Features
 
 - responsive terminal UI that works in standard terminals and tmux popups
-- direct switch hotkeys using `asdfqwertzxcvb`
+- direct switch hotkeys using `asdfqwertzxcvb` for the All list
+- favorite hotkeys on `ctrl+asdfqwertzxcvb`
 - favorite pinning with favorites always rendered first
-- reorder mode (`space` + `j/k` or arrows) to change session priority and hotkey assignment
-- tmux session management from the UI: create (`n`) and kill (`x`)
+- reorder modes (`push` / `swap`) with previews and key-change indicators
+- tmux session management from the UI: create (`n`) and kill (`Shift+K`)
 
 ## Install
 
@@ -52,15 +53,17 @@ Manual install from the Releases page:
 
 ## Keymap
 
-- `asdfqwertzxcvb`: switch directly to listed session
+- `asdfqwertzxcvb`: switch directly to listed session in `All`
+- `ctrl+asdfqwertzxcvb`: switch directly to listed session in `Favorites`
 - `j/k` or arrow keys: move cursor
-- `tab`: switch active section (`Favorites` / `Others`)
+- `tab`: switch active section (`Favorites` / `All`)
 - `space`: toggle reorder mode for selected session
+- `m`: cycle reorder mode (`push` / `swap`)
 - `enter`: switch to selected session
-- `f`: toggle favorite on selected session
+- `.`: toggle favorite on selected session
 - `n`: create new tmux session (type name, `enter`)
-- `x`: kill selected tmux session
-- `r`: refresh tmux session list
+- `Shift+K`: kill selected tmux session
+- `l`: refresh tmux session list
 - `esc` or `ctrl+c`: quit
 
 ## tmux popup binding
@@ -73,11 +76,11 @@ Pick any key you want instead of `g`.
 
 ## State storage
 
-`tgo` stores favorites and non-favorite ordering in:
+`tgo` stores favorites, favorite root dirs, and ordering in:
 
-- `~/.config/tgo/state.json`
+- `$XDG_CONFIG_HOME/tgo/state.json` (falls back to `~/.config/tgo/state.json`)
 
-Missing or stale sessions are automatically removed from saved state.
+Favorites persist even if a session is not currently running; missing favorites are recreated using the saved root directory.
 
 ## Local development
 

@@ -4,6 +4,18 @@ All notable changes to `tgo` will be documented in this file. This project adher
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-03-05
+
+### Changed
+- stabilized hotkey bindings so newly created sessions append at the bottom instead of displacing existing bindings.
+- added reorder styles (`push` and `swap`) with in-list preview indicators for moved/affected rows.
+- enabled switching reorder style with `m` while reordering.
+- made navigation seamless across `Favorites` and `All`, with cursor starting in `Favorites` when available.
+- remapped controls: favorite toggle is now `.`, refresh is now `l`, and kill is now `Shift+K`.
+- renamed `Others` section to `All` and kept running favorites visible in `All`.
+- split hotkeys by section: `letters` for `All`, `Ctrl+letters` for `Favorites`.
+- favorites now persist across tmux restarts and include saved root directories for recreation of missing favorite sessions.
+
 ## [0.1.0] - 2026-03-04
 
 ### Added

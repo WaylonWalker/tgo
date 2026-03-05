@@ -14,10 +14,10 @@ func TestNormalizeState(t *testing.T) {
 
 	got := normalizeState(st, sessions)
 
-	if !reflect.DeepEqual(got.Favorites, []string{"web", "api"}) {
+	if !reflect.DeepEqual(got.Favorites, []string{"web", "missing", "api"}) {
 		t.Fatalf("favorites mismatch: got %v", got.Favorites)
 	}
-	if !reflect.DeepEqual(got.Order, []string{"db"}) {
+	if !reflect.DeepEqual(got.Order, []string{"db", "api", "web"}) {
 		t.Fatalf("order mismatch: got %v", got.Order)
 	}
 }
@@ -34,16 +34,15 @@ func TestOrderSessions(t *testing.T) {
 	if got := names(favorites); !reflect.DeepEqual(got, []string{"web", "api"}) {
 		t.Fatalf("favorites order mismatch: got %v", got)
 	}
-	if got := names(others); !reflect.DeepEqual(got, []string{"docs", "db"}) {
-		t.Fatalf("others order mismatch: got %v", got)
+	if got := names(others); !reflect.DeepEqual(got, []string{"docs", "db", "api", "web"}) {
+		t.Fatalf("all order mismatch: got %v", got)
 	}
 }
 
 func TestAssignHotkeys(t *testing.T) {
-	favorites := []session{{Name: "web"}, {Name: "api"}}
-	others := []session{{Name: "db"}, {Name: "docs"}}
+	rows := []session{{Name: "web"}, {Name: "api"}, {Name: "db"}, {Name: "docs"}}
 
-	got := assignHotkeys(favorites, others, SessionHotkeyAlphabet())
+	got := assignHotkeys(rows, SessionHotkeyAlphabet())
 
 	assertHotkey(t, got, "web", 'a')
 	assertHotkey(t, got, "api", 's')
@@ -53,10 +52,9 @@ func TestAssignHotkeys(t *testing.T) {
 
 func TestAssignHotkeysLimit(t *testing.T) {
 	alpha := "as"
-	favorites := []session{{Name: "one"}}
-	others := []session{{Name: "two"}, {Name: "three"}}
+	rows := []session{{Name: "one"}, {Name: "two"}, {Name: "three"}}
 
-	got := assignHotkeys(favorites, others, alpha)
+	got := assignHotkeys(rows, alpha)
 
 	assertHotkey(t, got, "one", 'a')
 	assertHotkey(t, got, "two", 's')
