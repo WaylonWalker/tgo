@@ -4,6 +4,8 @@ All notable changes to `tgo` will be documented in this file. This project adher
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-03-04
+
 ### Added
 - interactive TUI built with `tcell`, including responsive rendering for tmux popup usage.
 - tmux integration for listing sessions, switching clients, creating sessions, and killing sessions.
