@@ -10,13 +10,13 @@ jobs:
   checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: 1.24
       - name: Cache Go modules
-        uses: actions/cache@v3
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cache/go-build
@@ -25,9 +25,9 @@ jobs:
       - name: Format code
         run: go fmt ./...
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v4
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: v1.64.0
+          version: latest
           args: run ./...
       - name: Vet packages
         run: go vet ./...

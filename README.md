@@ -17,6 +17,39 @@ The core flow is two keystrokes:
 - reorder mode (`space` + `j/k` or arrows) to change session priority and hotkey assignment
 - tmux session management from the UI: create (`n`) and kill (`x`)
 
+## Install
+
+Common release install options:
+
+```bash
+mise use -g github:waylonwalker/tgo
+```
+
+```bash
+curl https://i.jpillora.com/waylonwalker/tgo | bash
+```
+
+Install with Go:
+
+```bash
+go install github.com/waylonwalker/tgo/cmd/tgo@latest
+```
+
+Download a release asset with GitHub CLI (example for Linux amd64):
+
+```bash
+gh release download --repo waylonwalker/tgo --pattern 'tgo-linux-amd64.zip'
+unzip tgo-linux-amd64.zip
+chmod +x tgo-linux-amd64
+mv tgo-linux-amd64 /usr/local/bin/tgo
+```
+
+Manual install from the Releases page:
+
+1. Download the archive for your OS/arch from `https://github.com/WaylonWalker/tgo/releases`.
+2. Unzip it.
+3. Move the binary to a directory in your `PATH` (for example `/usr/local/bin/tgo`).
+
 ## Keymap
 
 - `asdfqwertzxcvb`: switch directly to listed session
