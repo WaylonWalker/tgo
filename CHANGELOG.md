@@ -4,6 +4,18 @@ All notable changes to `tgo` will be documented in this file. This project adher
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-04-06
+
+### Added
+- fuzzy search/filter for sessions and usage pickers: press `/` to enter filter mode, type to narrow results, arrow keys to navigate, Enter to select, Esc to cancel.
+- runtime view switching with number keys: press `1` for sessions, `2` for CPU picker, `3` for memory picker without restarting.
+- unified TUI dispatch loop that shares a single tcell screen across all views, preserving session-switcher state (favorites, cursors) when switching back.
+- view tab bar in the header showing `[1:sessions]  2:cpu  3:mem` with the active view bracketed.
+
+### Changed
+- `tgo cpu` and `tgo mem` CLI arguments still work but now enter the unified TUI starting at the corresponding view.
+- session-switcher `app` is created once and reused across view switches; usage pickers are recreated each switch to refresh data.
+
 ## [0.3.0] - 2026-04-06
 
 ### Added

@@ -33,7 +33,7 @@ func (a *app) draw(screen tcell.Screen) {
 	if a.reorderStyle == reorderSwap {
 		styleTag = "swap"
 	}
-	a.drawText(screen, 0, line, headerStyle, fmt.Sprintf("tgo - tmux session switcher  [reorder:%s]", styleTag))
+	a.drawText(screen, 0, line, headerStyle, fmt.Sprintf("%s  [reorder:%s]", viewTabs(viewDefault), styleTag))
 	line++
 
 	var help string
@@ -47,8 +47,11 @@ func (a *app) draw(screen tcell.Screen) {
 			help = "SWAP MODE  [j/k/↑↓] navigate target  [space/enter] swap  [m] mode  [esc] cancel"
 			helpLineStyle = tcell.StyleDefault.Foreground(tcell.ColorTeal).Bold(true)
 		}
+	case modeFilter:
+		help = "FILTER  [type] filter  [↑↓] move  [tab] section  [enter] switch  [esc] cancel"
+		helpLineStyle = tcell.StyleDefault.Foreground(tcell.ColorYellow).Bold(true)
 	default:
-		help = "[letters] all  [ctrl+letters] favorite  [j/k] move  [tab] section  [space] reorder  [m] cycle-mode  [.] fav  [Shift+K] kill  [l] refresh  [enter] switch  [esc/ctrl+c] quit"
+		help = "[letters] all  [ctrl+letters] favorite  [j/k] move  [tab] section  [1/2/3] view  [space] reorder  [m] cycle-mode  [.] fav  [Shift+K] kill  [/] filter  [l] refresh  [enter] switch  [esc/ctrl+c] quit"
 		helpLineStyle = helpStyle
 	}
 	a.drawText(screen, 0, line, helpLineStyle, truncate(help, width))
@@ -56,6 +59,12 @@ func (a *app) draw(screen tcell.Screen) {
 
 	if a.mode == modeCreate {
 		prompt := "new session name: " + a.createInput
+		a.drawText(screen, 0, line, tcell.StyleDefault.Foreground(tcell.ColorYellow), truncate(prompt, width))
+		line++
+	}
+
+	if a.mode == modeFilter {
+		prompt := "/" + a.filterInput
 		a.drawText(screen, 0, line, tcell.StyleDefault.Foreground(tcell.ColorYellow), truncate(prompt, width))
 		line++
 	}

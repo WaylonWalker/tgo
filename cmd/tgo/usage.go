@@ -49,8 +49,12 @@ type usagePicker struct {
 	client        *tmuxCLI
 	mode          usageMode
 	rows          []windowUsage
+	allRows       []windowUsage // unfiltered rows for filter restore
 	hotkeys       map[string]rune
 	cursor        int
+	filtering     bool
+	filterInput   string
+	nextView      viewID // set when user presses 1/2/3
 	status        string
 	statusExpiry  time.Time
 	procTotals    usageTotals // totals across all processes
@@ -69,12 +73,12 @@ func parseUsageMode(arg string) (usageMode, bool) {
 	}
 }
 
-func runUsagePicker(client *tmuxCLI, mode usageMode) error {
+func runUsageView(client *tmuxCLI, screen tcell.Screen, mode usageMode) (runResult, error) {
 	rows, totals, err := loadPaneUsage(client, mode)
 	if err != nil {
-		return err
+		return runResult{}, err
 	}
-	return newUsagePicker(client, mode, rows, totals).Run()
+	return newUsagePicker(client, mode, rows, totals).Run(screen)
 }
 
 func loadPaneUsage(client *tmuxCLI, mode usageMode) ([]windowUsage, usageTotals, error) {
@@ -216,6 +220,7 @@ func newUsagePicker(client *tmuxCLI, mode usageMode, rows []windowUsage, totals 
 }
 
 func (p *usagePicker) setRows(rows []windowUsage) {
+	p.allRows = rows
 	p.rows = rows
 	p.hotkeys = assignWindowHotkeys(rows, SessionHotkeyAlphabet())
 	if p.cursor >= len(p.rows) {
@@ -223,15 +228,12 @@ func (p *usagePicker) setRows(rows []windowUsage) {
 	}
 }
 
-func (p *usagePicker) Run() error {
-	screen, err := tcell.NewScreen()
-	if err != nil {
-		return fmt.Errorf("create screen: %w", err)
+func (p *usagePicker) Run(screen tcell.Screen) (runResult, error) {
+	activeView := viewCPU
+	if p.mode == usageModeMem {
+		activeView = viewMem
 	}
-	if err := screen.Init(); err != nil {
-		return fmt.Errorf("init screen: %w", err)
-	}
-	defer screen.Fini()
+	p.nextView = activeView // reset on entry
 
 	screen.HideCursor()
 	p.draw(screen)
@@ -247,12 +249,15 @@ func (p *usagePicker) Run() error {
 			if target != "" {
 				screen.Fini()
 				if err := p.client.SwitchPane(target); err != nil {
-					return err
+					return runResult{}, err
 				}
-				return nil
+				return runResult{Outcome: outcomeSwitch}, nil
 			}
 			if done {
-				return nil
+				if p.nextView != activeView {
+					return runResult{Outcome: outcomeNav, NextView: p.nextView}, nil
+				}
+				return runResult{Outcome: outcomeQuit}, nil
 			}
 			p.draw(screen)
 		}
@@ -260,6 +265,9 @@ func (p *usagePicker) Run() error {
 }
 
 func (p *usagePicker) handleKey(key *tcell.EventKey) (bool, string) {
+	if p.filtering {
+		return p.handleFilterKey(key)
+	}
 	if key.Key() == tcell.KeyCtrlC || key.Key() == tcell.KeyEscape {
 		return true, ""
 	}
@@ -296,8 +304,91 @@ func (p *usagePicker) handleKey(key *tcell.EventKey) (bool, string) {
 		if err := p.refresh(); err != nil {
 			p.setError(err)
 		}
+	case '/':
+		p.filtering = true
+		p.filterInput = ""
+		p.applyFilter()
+	case '1':
+		p.nextView = viewDefault
+		return true, ""
+	case '2':
+		if p.mode == usageModeCPU {
+			// Already on CPU view, ignore.
+			break
+		}
+		p.nextView = viewCPU
+		return true, ""
+	case '3':
+		if p.mode == usageModeMem {
+			// Already on mem view, ignore.
+			break
+		}
+		p.nextView = viewMem
+		return true, ""
 	}
 	return false, ""
+}
+
+func (p *usagePicker) handleFilterKey(key *tcell.EventKey) (bool, string) {
+	switch key.Key() {
+	case tcell.KeyCtrlC:
+		return true, ""
+	case tcell.KeyEsc:
+		p.filtering = false
+		p.filterInput = ""
+		p.rows = p.allRows
+		p.hotkeys = assignWindowHotkeys(p.rows, SessionHotkeyAlphabet())
+		if p.cursor >= len(p.rows) {
+			p.cursor = max(len(p.rows)-1, 0)
+		}
+		return false, ""
+	case tcell.KeyEnter:
+		row, ok := p.selected()
+		p.filtering = false
+		p.filterInput = ""
+		p.rows = p.allRows
+		p.hotkeys = assignWindowHotkeys(p.rows, SessionHotkeyAlphabet())
+		if p.cursor >= len(p.rows) {
+			p.cursor = max(len(p.rows)-1, 0)
+		}
+		if ok {
+			return false, row.Target
+		}
+		return false, ""
+	case tcell.KeyBackspace, tcell.KeyBackspace2:
+		if len(p.filterInput) > 0 {
+			p.filterInput = p.filterInput[:len(p.filterInput)-1]
+			p.applyFilter()
+		}
+		return false, ""
+	case tcell.KeyUp:
+		p.moveUp()
+		return false, ""
+	case tcell.KeyDown:
+		p.moveDown()
+		return false, ""
+	case tcell.KeyRune:
+		r := key.Rune()
+		if r >= 32 && r <= 126 {
+			p.filterInput += string(r)
+			p.applyFilter()
+		}
+		return false, ""
+	default:
+		return false, ""
+	}
+}
+
+func (p *usagePicker) applyFilter() {
+	if p.filterInput == "" {
+		p.rows = p.allRows
+	} else {
+		p.rows = filterWindowUsage(p.allRows, p.filterInput)
+	}
+	p.hotkeys = assignWindowHotkeys(p.rows, SessionHotkeyAlphabet())
+	if p.cursor >= len(p.rows) {
+		p.cursor = max(len(p.rows)-1, 0)
+	}
 }
 
 func (p *usagePicker) moveUp() {
@@ -370,8 +461,27 @@ func (p *usagePicker) draw(screen tcell.Screen) {
 	errorStyle := tcell.StyleDefault.Foreground(tcell.ColorRed)
 
 	line := 0
-	p.drawText(screen, 0, line, headerStyle, fmt.Sprintf("tgo - tmux pane %s picker", p.mode.label()))
+	activeView := viewCPU
+	if p.mode == usageModeMem {
+		activeView = viewMem
+	}
+	p.drawText(screen, 0, line, headerStyle, viewTabs(activeView))
 	line++
+
+	helpLine := "[letters] switch  [j/k/↑↓] move  [1/2/3] view  [/] filter  [l] refresh  [enter] switch  [esc/ctrl+c] quit"
+	if p.filtering {
+		helpLine = "FILTER  [type] filter  [↑↓] move  [enter] switch  [esc] cancel"
+		p.drawText(screen, 0, line, tcell.StyleDefault.Foreground(tcell.ColorYellow).Bold(true), truncate(helpLine, width))
+	} else {
+		p.drawText(screen, 0, line, helpStyle, truncate(helpLine, width))
+	}
+	line++
+
+	if p.filtering {
+		prompt := "/" + p.filterInput
+		p.drawText(screen, 0, line, tcell.StyleDefault.Foreground(tcell.ColorYellow), truncate(prompt, width))
+		line++
+	}
 	// show totals and tmux contribution header
 	// total system CPU and memory (memory only if available)
 	totalCPU := p.procTotals.CPU
@@ -540,13 +650,6 @@ func compareWindowIndex(left string, right string) int {
 		return 1
 	}
 	return 0
-}
-
-func (m usageMode) label() string {
-	if m == usageModeMem {
-		return "memory"
-	}
-	return "cpu"
 }
 
 func (m usageMode) metric(row windowUsage) string {

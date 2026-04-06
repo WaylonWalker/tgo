@@ -15,6 +15,7 @@ const (
 	modeNormal mode = iota
 	modeReorder
 	modeCreate
+	modeFilter
 )
 
 type reorderStyle int
@@ -41,12 +42,15 @@ type app struct {
 
 	mode        mode
 	createInput string
+	filterInput string
 
 	reorderStyle  reorderStyle
 	pickupName    string
 	pickupSection int
 	reorderBase   map[string]rune
 	reorderBaseF  map[string]rune
+
+	nextView viewID // set when user presses 1/2/3 to navigate
 
 	status       string
 	statusExpiry time.Time
@@ -71,15 +75,8 @@ func newApp(client tmuxClient, store *stateStore) (*app, error) {
 	return a, nil
 }
 
-func (a *app) Run() error {
-	screen, err := tcell.NewScreen()
-	if err != nil {
-		return fmt.Errorf("create screen: %w", err)
-	}
-	if err := screen.Init(); err != nil {
-		return fmt.Errorf("init screen: %w", err)
-	}
-	defer screen.Fini()
+func (a *app) Run(screen tcell.Screen) (runResult, error) {
+	a.nextView = viewDefault // reset on entry
 
 	screen.HideCursor()
 	a.draw(screen)
@@ -95,12 +92,15 @@ func (a *app) Run() error {
 			if runSwitch != "" {
 				screen.Fini()
 				if err := a.client.SwitchSession(runSwitch); err != nil {
-					return err
+					return runResult{}, err
 				}
-				return nil
+				return runResult{Outcome: outcomeSwitch}, nil
 			}
 			if done {
-				return nil
+				if a.nextView != viewDefault {
+					return runResult{Outcome: outcomeNav, NextView: a.nextView}, nil
+				}
+				return runResult{Outcome: outcomeQuit}, nil
 			}
 			a.draw(screen)
 		}
@@ -110,6 +110,9 @@ func (a *app) Run() error {
 func (a *app) handleKey(key *tcell.EventKey) (done bool, switchTo string) {
 	if a.mode == modeCreate {
 		return a.handleCreateKey(key)
+	}
+	if a.mode == modeFilter {
+		return a.handleFilterKey(key)
 	}
 
 	if key.Key() == tcell.KeyCtrlC {
@@ -197,6 +200,24 @@ func (a *app) handleKey(key *tcell.EventKey) (done bool, switchTo string) {
 			}
 		case 'm':
 			a.cycleReorderStyle()
+		case '/':
+			if a.mode != modeReorder {
+				a.mode = modeFilter
+				a.filterInput = ""
+				a.applyFilter()
+			}
+		case '1':
+			// Already on sessions view, ignore.
+		case '2':
+			if a.mode != modeReorder {
+				a.nextView = viewCPU
+				return true, ""
+			}
+		case '3':
+			if a.mode != modeReorder {
+				a.nextView = viewMem
+				return true, ""
+			}
 		}
 		return false, ""
 	}
@@ -250,6 +271,67 @@ func (a *app) handleCreateKey(key *tcell.EventKey) (bool, string) {
 	default:
 		return false, ""
 	}
+}
+
+func (a *app) handleFilterKey(key *tcell.EventKey) (bool, string) {
+	switch key.Key() {
+	case tcell.KeyCtrlC:
+		return true, ""
+	case tcell.KeyEsc:
+		a.mode = modeNormal
+		a.filterInput = ""
+		a.rebuildLists()
+		return false, ""
+	case tcell.KeyEnter:
+		name, ok := a.selectedName()
+		// Exit filter mode but keep the selection.
+		a.mode = modeNormal
+		a.filterInput = ""
+		a.rebuildLists()
+		if ok {
+			a.selectByName(name)
+			return false, name
+		}
+		return false, ""
+	case tcell.KeyBackspace, tcell.KeyBackspace2:
+		if len(a.filterInput) > 0 {
+			a.filterInput = a.filterInput[:len(a.filterInput)-1]
+			a.applyFilter()
+		}
+		return false, ""
+	case tcell.KeyUp:
+		a.moveUp()
+		return false, ""
+	case tcell.KeyDown:
+		a.moveDown()
+		return false, ""
+	case tcell.KeyTab:
+		a.toggleSection()
+		return false, ""
+	case tcell.KeyRune:
+		r := key.Rune()
+		if r >= 32 && r <= 126 {
+			a.filterInput += string(r)
+			a.applyFilter()
+		}
+		return false, ""
+	default:
+		return false, ""
+	}
+}
+
+func (a *app) applyFilter() {
+	allFav, allOther := orderSessions(a.sessions, a.state)
+	if a.filterInput == "" {
+		a.favorites = allFav
+		a.others = allOther
+	} else {
+		a.favorites = filterSessions(allFav, a.filterInput)
+		a.others = filterSessions(allOther, a.filterInput)
+	}
+	a.favKeys = assignHotkeys(a.favorites, SessionHotkeyAlphabet())
+	a.hotkeys = assignHotkeys(a.others, SessionHotkeyAlphabet())
+	a.clampCursors()
 }
 
 func (a *app) toggleSection() {
