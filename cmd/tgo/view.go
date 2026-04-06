@@ -169,7 +169,7 @@ func (a *app) drawSection(screen tcell.Screen, y int, width int, height int, tit
 			style = tcell.StyleDefault.Background(tcell.ColorGray).Foreground(tcell.ColorBlack)
 			prefix = "> "
 		}
-		if keyChangeLabel != "" && !(i == cursor && active) {
+		if keyChangeLabel != "" && (i != cursor || !active) {
 			style = style.Foreground(tcell.NewRGBColor(130, 150, 160))
 		}
 
