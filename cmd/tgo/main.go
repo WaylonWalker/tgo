@@ -9,6 +9,19 @@ const hotkeyRunes = "asdfqwertzxcvb"
 
 func main() {
 	client := &tmuxCLI{}
+	if len(os.Args) > 1 {
+		mode, ok := parseUsageMode(os.Args[1])
+		if !ok {
+			fmt.Fprintf(os.Stderr, "tgo: unknown command %q\n", os.Args[1])
+			os.Exit(2)
+		}
+		if err := runUsagePicker(client, mode); err != nil {
+			fmt.Fprintf(os.Stderr, "tgo: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	store, err := openStateStore()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "tgo: state init failed: %v\n", err)

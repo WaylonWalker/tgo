@@ -4,6 +4,15 @@ All notable changes to `tgo` will be documented in this file. This project adher
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-06
+
+### Added
+- tmux pane usage pickers via `tgo cpu` and `tgo mem`, with live process CPU and memory aggregation per pane.
+- direct switching to the selected pane target from the usage picker, including session/window focus before pane selection.
+
+### Changed
+- documented the new usage picker commands and install flow in the README.
+
 ## [0.2.0] - 2026-03-05
 
 ### Changed

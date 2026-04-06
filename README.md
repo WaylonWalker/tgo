@@ -9,6 +9,8 @@ The core flow is two keystrokes:
 
 `tgo` lists tmux sessions, pins favorites at the top, and keeps hotkeys stable by priority.
 
+`tgo cpu` and `tgo mem` open a tmux pane picker sorted by live process usage, so you can jump straight to the busiest pane.
+
 ## Features
 
 - responsive terminal UI that works in standard terminals and tmux popups
@@ -17,6 +19,7 @@ The core flow is two keystrokes:
 - favorite pinning with favorites always rendered first
 - reorder modes (`push` / `swap`) with previews and key-change indicators
 - tmux session management from the UI: create (`n`) and kill (`Shift+K`)
+- tmux pane pickers sorted by live CPU or memory usage (`tgo cpu`, `tgo mem`)
 
 ## Install
 
@@ -73,6 +76,15 @@ bind-key g display-popup -E -w 70% -h 70% "tgo"
 ```
 
 Pick any key you want instead of `g`.
+
+## Usage Pickers
+
+```bash
+tgo cpu
+tgo mem
+```
+
+Both commands inspect tmux pane PIDs, sum descendant process usage per tmux pane, sort the picker by the requested metric, and switch to the chosen pane target.
 
 ## State storage
 
