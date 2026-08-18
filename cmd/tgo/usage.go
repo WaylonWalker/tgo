@@ -19,6 +19,7 @@ type usageMode int
 const (
 	usageModeCPU usageMode = iota
 	usageModeMem
+	usageModeAgents
 )
 
 type usageTotals struct {
@@ -41,6 +42,13 @@ type windowUsage struct {
 	RSS           int64
 	TopCPUProcess string
 	TopMemProcess string
+	AgentStatus  string
+	AgentCommand string
+	AgentHarness string
+	// CopilotStatus and CopilotCommand are retained for compatibility with the
+	// original Copilot picker data shape. New code uses the agent-prefixed fields.
+	CopilotStatus  string
+	CopilotCommand string
 	topCPU        float64
 	topMemRSS     int64
 }
@@ -54,12 +62,14 @@ type usagePicker struct {
 	cursor        int
 	filtering     bool
 	filterInput   string
-	nextView      viewID // set when user presses 1/2/3
+	nextView      viewID // set when user presses a view shortcut
 	status        string
 	statusExpiry  time.Time
 	procTotals    usageTotals // totals across all processes
 	sysMemTotalKB int64
 	numCPU        int
+	listStart      int
+	listOffset     int
 }
 
 func parseUsageMode(arg string) (usageMode, bool) {
@@ -68,6 +78,8 @@ func parseUsageMode(arg string) (usageMode, bool) {
 		return usageModeCPU, true
 	case "mem":
 		return usageModeMem, true
+	case "agents", "copilot", "opencode":
+		return usageModeAgents, true
 	default:
 		return 0, false
 	}
@@ -105,9 +117,107 @@ func loadPaneUsage(client *tmuxCLI, mode usageMode) ([]windowUsage, usageTotals,
 			totals.TopMemProcess = proc.Comm
 		}
 	}
+	if mode.isAgent() {
+		store, err := openAgentRegistryStore()
+		if err != nil {
+			return nil, usageTotals{}, err
+		}
+		registry, err := store.Load()
+		if err != nil {
+			return nil, usageTotals{}, err
+		}
+		return buildAgentsUsage(panes, procs, registry), totals, nil
+	}
 	rows := buildPaneUsage(panes, procs)
 	sortPaneUsage(rows, mode)
 	return rows, totals, nil
+}
+
+func buildCopilotUsage(panes []paneInfo, procs []procStat) []windowUsage {
+	return buildHarnessUsage("copilot", panes, procs, newAgentRegistry())
+}
+
+func buildAgentsUsage(panes []paneInfo, procs []procStat, registry agentRegistry) []windowUsage {
+	rows := buildHarnessUsage("copilot", panes, procs, registry)
+	rows = append(rows, buildHarnessUsage("opencode", panes, procs, registry)...)
+	sortPaneUsage(rows, usageModeAgents)
+	return rows
+}
+
+func buildHarnessUsage(harness string, panes []paneInfo, procs []procStat, registry agentRegistry) []windowUsage {
+	var matched []harnessPane
+	switch harness {
+	case "copilot":
+		matched = findCopilotPanes(panes, procs)
+	case "opencode":
+		matched = findOpenCodePanes(panes, procs)
+	default:
+		matched = findHarnessPanes(harness, panes, procs)
+	}
+	rows := make([]windowUsage, 0, len(matched))
+	byTarget := make(map[string]int, len(matched))
+	for _, pane := range matched {
+		rows = append(rows, windowUsage{
+			Target:       pane.Target(),
+			SessionName:  pane.SessionName,
+			WindowIndex:  pane.WindowIndex,
+			WindowName:   pane.WindowName,
+			PaneIndex:    pane.PaneIndex,
+			Active:       pane.Active,
+			AgentStatus:  pane.Status,
+			AgentCommand: "",
+			AgentHarness: harness,
+			CopilotStatus:  pane.Status,
+			CopilotCommand: pane.Command,
+		})
+		byTarget[pane.Target()] = len(rows) - 1
+	}
+
+	seenTargets := make(map[string]bool)
+	for _, reference := range agentRunsForHarness(registry, harness) {
+		run := reference.Run
+		if run.Pane == "" || seenTargets[run.Pane] {
+			continue
+		}
+		seenTargets[run.Pane] = true
+		if index, ok := byTarget[run.Pane]; ok {
+			rows[index].AgentStatus = agentRunStatus(run.Status, rows[index].AgentStatus)
+			rows[index].AgentCommand = agentRunSummary(reference)
+		}
+	}
+	sortPaneUsage(rows, usageModeAgents)
+	return rows
+}
+
+func agentRunStatus(kind string, fallback string) string {
+	switch kind {
+	case "session-start", "user-prompt":
+		return "working"
+	case "agent-stop":
+		return "idle"
+	case "question":
+		return "waiting"
+	case "session-end", "completed", "failed", "cancelled", "stopped":
+		return "stopped"
+	default:
+		return fallback
+	}
+}
+
+func agentRunSummary(reference agentRunReference) string {
+	if reference.Run.Summary != "" {
+		return reference.Run.Summary
+	}
+	for _, event := range reference.Run.Events {
+		if description := agentEventDescription(event.Data); description != "" {
+			return description
+		}
+	}
+	label := "run " + reference.Run.ID
+	if reference.SessionID != "" {
+		label = "session " + reference.SessionID + " " + label
+	}
+	return label
 }
 
 func buildPaneUsage(panes []paneInfo, procs []procStat) []windowUsage {
@@ -189,7 +299,7 @@ func sortPaneUsage(rows []windowUsage, mode usageMode) {
 			if left.RSS != right.RSS {
 				return left.RSS > right.RSS
 			}
-		default:
+		case usageModeCPU:
 			if left.CPU != right.CPU {
 				return left.CPU > right.CPU
 			}
@@ -229,20 +339,54 @@ func (p *usagePicker) setRows(rows []windowUsage) {
 }
 
 func (p *usagePicker) Run(screen tcell.Screen) (runResult, error) {
-	activeView := viewCPU
-	if p.mode == usageModeMem {
-		activeView = viewMem
-	}
+	activeView := viewForUsageMode(p.mode)
 	p.nextView = activeView // reset on entry
 
 	screen.HideCursor()
 	p.draw(screen)
+
+	var refreshDone chan struct{}
+	if p.mode.isAgent() {
+		refreshDone = make(chan struct{})
+		refreshTicker := time.NewTicker(2 * time.Second)
+		defer func() {
+			refreshTicker.Stop()
+			close(refreshDone)
+		}()
+		go func() {
+			for {
+				select {
+				case <-refreshTicker.C:
+					_ = screen.PostEvent(tcell.NewEventInterrupt("agent-refresh"))
+				case <-refreshDone:
+					return
+				}
+			}
+		}()
+	}
 
 	for {
 		ev := screen.PollEvent()
 		switch e := ev.(type) {
 		case *tcell.EventResize:
 			screen.Sync()
+			p.draw(screen)
+		case *tcell.EventInterrupt:
+			if !p.filtering {
+				if err := p.refresh(false); err != nil {
+					p.setError(err)
+				}
+			}
+			p.draw(screen)
+		case *tcell.EventMouse:
+			target := p.handleMouse(e)
+			if target != "" {
+				screen.Fini()
+				if err := p.client.SwitchPane(target); err != nil {
+					return runResult{}, err
+				}
+				return runResult{Outcome: outcomeSwitch}, nil
+			}
 			p.draw(screen)
 		case *tcell.EventKey:
 			done, target := p.handleKey(e)
@@ -262,6 +406,19 @@ func (p *usagePicker) Run(screen tcell.Screen) (runResult, error) {
 			p.draw(screen)
 		}
 	}
+}
+
+func (p *usagePicker) handleMouse(event *tcell.EventMouse) string {
+	_, y := event.Position()
+	index := p.listOffset + y - p.listStart
+	if y < p.listStart || index < 0 || index >= len(p.rows) {
+		return ""
+	}
+	p.cursor = index
+	if event.Buttons()&tcell.Button1 != 0 {
+		return p.rows[index].Target
+	}
+	return ""
 }
 
 func (p *usagePicker) handleKey(key *tcell.EventKey) (bool, string) {
@@ -301,7 +458,7 @@ func (p *usagePicker) handleKey(key *tcell.EventKey) (bool, string) {
 	case 'k':
 		p.moveUp()
 	case 'l':
-		if err := p.refresh(); err != nil {
+		if err := p.refresh(true); err != nil {
 			p.setError(err)
 		}
 	case '/':
@@ -324,6 +481,13 @@ func (p *usagePicker) handleKey(key *tcell.EventKey) (bool, string) {
 			break
 		}
 		p.nextView = viewMem
+		return true, ""
+	case '4':
+		if p.mode == usageModeAgents {
+			// Already on agents view, ignore.
+			break
+		}
+		p.nextView = viewAgents
 		return true, ""
 	}
 	return false, ""
@@ -403,14 +567,16 @@ func (p *usagePicker) moveDown() {
 	}
 }
 
-func (p *usagePicker) refresh() error {
+func (p *usagePicker) refresh(announce bool) error {
 	rows, totals, err := loadPaneUsage(p.client, p.mode)
 	if err != nil {
 		return err
 	}
 	p.setRows(rows)
 	p.procTotals = totals
-	p.setStatus("usage refreshed")
+	if announce {
+		p.setStatus("pane list refreshed")
+	}
 	return nil
 }
 
@@ -461,14 +627,11 @@ func (p *usagePicker) draw(screen tcell.Screen) {
 	errorStyle := tcell.StyleDefault.Foreground(tcell.ColorRed)
 
 	line := 0
-	activeView := viewCPU
-	if p.mode == usageModeMem {
-		activeView = viewMem
-	}
+	activeView := viewForUsageMode(p.mode)
 	p.drawText(screen, 0, line, headerStyle, viewTabs(activeView))
 	line++
 
-	helpLine := "[letters] switch  [j/k/↑↓] move  [1/2/3] view  [/] filter  [l] refresh  [enter] switch  [esc/ctrl+c] quit"
+	helpLine := "[letters] switch  [j/k/↑↓] move  [1/2/3/4] view  [/] filter  [l] refresh  [enter] switch  [esc/ctrl+c] quit"
 	if p.filtering {
 		helpLine = "FILTER  [type] filter  [↑↓] move  [enter] switch  [esc] cancel"
 		p.drawText(screen, 0, line, tcell.StyleDefault.Foreground(tcell.ColorYellow).Bold(true), truncate(helpLine, width))
@@ -482,53 +645,20 @@ func (p *usagePicker) draw(screen tcell.Screen) {
 		p.drawText(screen, 0, line, tcell.StyleDefault.Foreground(tcell.ColorYellow), truncate(prompt, width))
 		line++
 	}
-	// show totals and tmux contribution header
-	// total system CPU and memory (memory only if available)
-	totalCPU := p.procTotals.CPU
-	totalMemKB := p.sysMemTotalKB
-	memTotalStr := ""
-	if totalMemKB > 0 {
-		memTotalStr = fmt.Sprintf(" sysMem:%s", formatRSS(totalMemKB))
+	if p.mode.isAgent() {
+		p.drawText(screen, 0, line, helpStyle, fmt.Sprintf("%s panes: %d", p.mode.agentLabel(), len(p.rows)))
+		line++
+	} else {
+		totalCPU := p.procTotals.CPU
+		totalMemKB := p.sysMemTotalKB
+		memTotalStr := ""
+		if totalMemKB > 0 {
+			memTotalStr = fmt.Sprintf(" sysMem:%s", formatRSS(totalMemKB))
+		}
+		cpuPercentStr := fmt.Sprintf("total: %5.1f%%%s", totalCPU, memTotalStr)
+		p.drawText(screen, 0, line, helpStyle, truncate(cpuPercentStr, width))
+		line++
 	}
-	// percent of system CPU used by tmux-managed processes (sum of procs)
-	cpuPercentStr := fmt.Sprintf("total: %5.1f%%%s", totalCPU, memTotalStr)
-	p.drawText(screen, 0, line, helpStyle, truncate(cpuPercentStr, width))
-	line++
-	// compute per-session aggregates so we can display how much each session contributes
-	sessionAgg := make(map[string]usageTotals)
-	for _, r := range p.rows {
-		agg := sessionAgg[r.SessionName]
-		agg.CPU += r.CPU
-		agg.RSS += r.RSS
-		if r.topCPU > agg.TopCPU {
-			agg.TopCPU = r.topCPU
-			agg.TopCPUProcess = r.TopCPUProcess
-		}
-		if r.topMemRSS > agg.TopMemRSS {
-			agg.TopMemRSS = r.topMemRSS
-			agg.TopMemProcess = r.TopMemProcess
-		}
-		sessionAgg[r.SessionName] = agg
-	}
-	// render per-session lines (compact)
-	sessLine := "sessions:"
-	for name, agg := range sessionAgg {
-		pct := 0.0
-		if p.mode == usageModeMem {
-			if totalMemKB > 0 {
-				pct = (float64(agg.RSS) / float64(totalMemKB)) * 100.0
-			}
-		} else {
-			pct = agg.CPU
-		}
-		sessLine = sessLine + fmt.Sprintf(" %s:%.1f%%", name, pct)
-		// avoid overflowing line length
-		if len(sessLine) > width-20 {
-			break
-		}
-	}
-	p.drawText(screen, 0, line, helpStyle, truncate(sessLine, width))
-	line++
 
 	if len(p.rows) == 0 {
 		p.drawText(screen, 0, line, tcell.StyleDefault.Foreground(tcell.ColorGray), "no tmux panes found")
@@ -539,6 +669,8 @@ func (p *usagePicker) draw(screen tcell.Screen) {
 			start = p.cursor - available + 1
 		}
 		end := min(start+available, len(p.rows))
+		p.listStart = line
+		p.listOffset = start
 		for i := start; i < end; i++ {
 			if line >= height-1 {
 				break
@@ -558,29 +690,24 @@ func (p *usagePicker) draw(screen tcell.Screen) {
 			if r, ok := p.hotkeys[row.Target]; ok {
 				hotkey = string(r)
 			}
-			// compute pane contribution percent
-			panePct := 0.0
-			if p.mode == usageModeMem {
-				if p.sysMemTotalKB > 0 {
+			var text string
+			if p.mode.isAgent() {
+				p.drawAgentRow(screen, line, width, row, prefix, hotkey, active, style)
+			} else {
+				panePct := row.CPU
+				if p.mode == usageModeMem && p.sysMemTotalKB > 0 {
 					panePct = (float64(row.RSS) / float64(p.sysMemTotalKB)) * 100.0
 				}
-			} else {
-				panePct = row.CPU
+				text = fmt.Sprintf(
+					"%s[%s] %s %8s (%5.1f%%)  %s:%s.%s  %s  top:%s",
+					prefix, hotkey, active, p.mode.metric(row), panePct,
+					row.SessionName, row.WindowIndex, row.PaneIndex, row.WindowName,
+					p.mode.topProcess(row),
+				)
 			}
-			text := fmt.Sprintf(
-				"%s[%s] %s %8s (%5.1f%%)  %s:%s.%s  %s  top:%s",
-				prefix,
-				hotkey,
-				active,
-				p.mode.metric(row),
-				panePct,
-				row.SessionName,
-				row.WindowIndex,
-				row.PaneIndex,
-				row.WindowName,
-				p.mode.topProcess(row),
-			)
-			p.drawText(screen, 0, line, style, truncate(text, width))
+			if !p.mode.isAgent() {
+				p.drawText(screen, 0, line, style, truncate(text, width))
+			}
 			line++
 		}
 	}
@@ -594,6 +721,85 @@ func (p *usagePicker) draw(screen tcell.Screen) {
 	}
 
 	screen.Show()
+}
+
+func (p *usagePicker) drawAgentRow(screen tcell.Screen, y, width int, row windowUsage, prefix, hotkey, _ string, rowStyle tcell.Style) {
+	status := agentStatusGlyph(row.AgentStatus)
+	location := fmt.Sprintf("%s:%s.%s", row.SessionName, row.WindowIndex, row.PaneIndex)
+	title := row.AgentCommand
+	if title == "" {
+		title = "session unavailable"
+	}
+	leading := fmt.Sprintf("%s[%s] ", prefix, hotkey)
+	trailing := fmt.Sprintf(" %-7s %-8s %s  %s", agentStatusLabel(row.AgentStatus), row.AgentHarness, location, title)
+
+	lineStyle := agentStatusStyle(row.AgentStatus)
+	if p.cursor >= 0 && p.cursor < len(p.rows) && p.rows[p.cursor].Target == row.Target {
+		_, background, _ := rowStyle.Decompose()
+		lineStyle = lineStyle.Background(background)
+	}
+	p.drawText(screen, 0, y, lineStyle, truncate(leading, width))
+	p.drawText(screen, len([]rune(leading)), y, lineStyle, truncate(status, max(width-len([]rune(leading)), 0)))
+	p.drawText(screen, len([]rune(leading))+len([]rune(status)), y, lineStyle, truncate(trailing, max(width-len([]rune(leading))-len([]rune(status)), 0)))
+}
+
+func agentStatusGlyph(status string) string {
+	switch status {
+	case "running", "working", "session-start", "user-prompt":
+		return "󰐊"
+	case "sleeping", "idle", "session-end", "agent-stop", "completed":
+		return "󰒲"
+	case "waiting", "permission-prompt":
+		return "󰋗"
+	case "stopped":
+		return "󰓛"
+	case "disk-sleep":
+		return "󰋊"
+	case "zombie":
+		return "󰠥"
+	default:
+		return "󰋗"
+	}
+}
+
+func agentStatusLabel(status string) string {
+	switch status {
+	case "running", "working", "session-start", "user-prompt":
+		return "working"
+	case "sleeping", "idle", "session-end", "agent-stop", "completed":
+		return "idle"
+	case "waiting", "permission-prompt":
+		return "waiting"
+	case "stopped", "zombie":
+		return "stopped"
+	default:
+		return status
+	}
+}
+
+func agentStatusStyle(status string) tcell.Style {
+	switch status {
+	case "running", "working", "session-start", "user-prompt":
+		return tcell.StyleDefault.Foreground(tcell.ColorGreen).Bold(true)
+	case "sleeping", "idle", "session-end", "agent-stop", "completed":
+		return tcell.StyleDefault.Foreground(tcell.ColorBlue)
+	case "waiting", "permission-prompt":
+		return tcell.StyleDefault.Foreground(tcell.ColorYellow).Bold(true)
+	case "stopped", "zombie":
+		return tcell.StyleDefault.Foreground(tcell.ColorRed)
+	case "disk-sleep":
+		return tcell.StyleDefault.Foreground(tcell.ColorYellow)
+	default:
+		return tcell.StyleDefault.Foreground(tcell.ColorGray)
+	}
+}
+
+func copilotStatusGlyph(status string, _ int) string {
+	return agentStatusGlyph(status)
+}
+
+func copilotStatusStyle(status string) tcell.Style {
+	return agentStatusStyle(status)
 }
 
 func (p *usagePicker) drawText(screen tcell.Screen, x int, y int, style tcell.Style, text string) {
@@ -657,6 +863,25 @@ func (m usageMode) metric(row windowUsage) string {
 		return formatRSS(row.RSS)
 	}
 	return fmt.Sprintf("%5.1f%%", row.CPU)
+}
+
+func viewForUsageMode(mode usageMode) viewID {
+	switch mode {
+	case usageModeMem:
+		return viewMem
+	case usageModeAgents:
+		return viewAgents
+	default:
+		return viewCPU
+	}
+}
+
+func (m usageMode) isAgent() bool {
+	return m == usageModeAgents
+}
+
+func (m usageMode) agentLabel() string {
+	return "Agent"
 }
 
 func (m usageMode) topProcess(row windowUsage) string {

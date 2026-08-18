@@ -86,6 +86,31 @@ tgo mem
 
 Both commands inspect tmux pane PIDs, sum descendant process usage per tmux pane, sort the picker by the requested metric, and switch to the chosen pane target.
 
+## Agent Pane Reports
+
+```bash
+tgo agents
+```
+
+Opens one pane picker for all supported harnesses, currently Copilot and
+OpenCode. Each row identifies its harness and merges recorded lifecycle data
+when available. `tgo copilot` and `tgo opencode` remain command aliases for
+the unified picker.
+
+## Agent hook registry
+
+Hook integrations can write generic lifecycle events without a database:
+
+```bash
+printf '%s\n' '{"sessionId":"session-1","extra":{"source":"hook"}}' |
+  tgo agent event --harness copilot --kind session-start --pane %4 --pid 1234
+```
+
+`--harness`, `--kind`, `--session`, `--run`, `--pane`, `--pid`, `--summary`,
+and `--json` are parsed strictly; a JSON object can be supplied on stdin or
+with `--json`. A missing run ID defaults to the pane (then PID, then session).
+The original JSON payload is retained with the event.
+
 ## State storage
 
 `tgo` stores favorites, favorite root dirs, and ordering in:
@@ -93,6 +118,10 @@ Both commands inspect tmux pane PIDs, sum descendant process usage per tmux pane
 - `$XDG_CONFIG_HOME/tgo/state.json` (falls back to `~/.config/tgo/state.json`)
 
 Favorites persist even if a session is not currently running; missing favorites are recreated using the saved root directory.
+
+Agent lifecycle data is stored atomically in:
+
+- `$XDG_STATE_HOME/tgo/agents.json` (falls back to `~/.local/state/tgo/agents.json`)
 
 ## Local development
 

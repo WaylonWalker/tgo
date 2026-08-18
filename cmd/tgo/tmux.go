@@ -41,11 +41,13 @@ func (p paneInfo) Target() string {
 }
 
 type procStat struct {
-	PID  int
-	PPID int
-	CPU  float64
-	RSS  int64
-	Comm string
+	PID     int
+	PPID    int
+	State   string
+	CPU     float64
+	RSS     int64
+	Comm    string
+	Command string
 }
 
 func (t *tmuxCLI) ListSessions() ([]session, error) {
@@ -204,7 +206,7 @@ func (t *tmuxCLI) ListPanes() ([]paneInfo, error) {
 }
 
 func (t *tmuxCLI) ListProcesses() ([]procStat, error) {
-	cmd := exec.Command("ps", "-eo", "pid=,ppid=,%cpu=,rss=,comm=")
+	cmd := exec.Command("ps", "-eo", "pid=,ppid=,stat=,%cpu=,rss=,comm=,args=")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("list processes: %w", err)
@@ -218,7 +220,7 @@ func (t *tmuxCLI) ListProcesses() ([]procStat, error) {
 	procs := make([]procStat, 0, len(lines))
 	for _, line := range lines {
 		parts := strings.Fields(line)
-		if len(parts) < 5 {
+		if len(parts) < 6 {
 			continue
 		}
 		pid, err := strconv.Atoi(parts[0])
@@ -229,20 +231,22 @@ func (t *tmuxCLI) ListProcesses() ([]procStat, error) {
 		if err != nil {
 			continue
 		}
-		cpu, err := strconv.ParseFloat(parts[2], 64)
+		cpu, err := strconv.ParseFloat(parts[3], 64)
 		if err != nil {
 			continue
 		}
-		rss, err := strconv.ParseInt(parts[3], 10, 64)
+		rss, err := strconv.ParseInt(parts[4], 10, 64)
 		if err != nil {
 			continue
 		}
 		procs = append(procs, procStat{
-			PID:  pid,
-			PPID: ppid,
-			CPU:  cpu,
-			RSS:  rss,
-			Comm: strings.Join(parts[4:], " "),
+			PID:     pid,
+			PPID:    ppid,
+			State:   parts[2],
+			CPU:     cpu,
+			RSS:     rss,
+			Comm:    parts[5],
+			Command: strings.Join(parts[6:], " "),
 		})
 	}
 

@@ -50,7 +50,7 @@ type app struct {
 	reorderBase   map[string]rune
 	reorderBaseF  map[string]rune
 
-	nextView viewID // set when user presses 1/2/3 to navigate
+	nextView viewID // set when user presses a view shortcut to navigate
 
 	status       string
 	statusExpiry time.Time
@@ -216,6 +216,11 @@ func (a *app) handleKey(key *tcell.EventKey) (done bool, switchTo string) {
 		case '3':
 			if a.mode != modeReorder {
 				a.nextView = viewMem
+				return true, ""
+			}
+		case '4':
+			if a.mode != modeReorder {
+				a.nextView = viewAgents
 				return true, ""
 			}
 		}

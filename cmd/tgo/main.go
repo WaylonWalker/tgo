@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/gdamore/tcell/v2"
 )
@@ -16,6 +17,7 @@ const (
 	viewDefault viewID = iota
 	viewCPU
 	viewMem
+	viewAgents
 )
 
 // runOutcome tells the dispatch loop what happened when a view exited.
@@ -34,19 +36,26 @@ type runResult struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "agent" {
+		if err := runAgentCommand(os.Args[2:], os.Stdin); err != nil {
+			fmt.Fprintf(os.Stderr, "tgo: %v\n", err)
+			os.Exit(2)
+		}
+		return
+	}
 	client := &tmuxCLI{}
 	startView := viewDefault
 	if len(os.Args) > 1 {
+		if len(os.Args) != 2 {
+			fmt.Fprintln(os.Stderr, "tgo: usage picker accepts exactly one command")
+			os.Exit(2)
+		}
 		mode, ok := parseUsageMode(os.Args[1])
 		if !ok {
 			fmt.Fprintf(os.Stderr, "tgo: unknown command %q\n", os.Args[1])
 			os.Exit(2)
 		}
-		if mode == usageModeCPU {
-			startView = viewCPU
-		} else {
-			startView = viewMem
-		}
+		startView = viewForUsageMode(mode)
 	}
 
 	if err := runTUI(client, startView); err != nil {
@@ -67,6 +76,7 @@ func runTUI(client *tmuxCLI, startView viewID) error {
 	}
 	defer screen.Fini()
 	screen.HideCursor()
+	screen.EnableMouse()
 
 	// The session-switcher app is created once and reused across view switches
 	// so that favorites, cursors, etc. are preserved.
@@ -92,6 +102,8 @@ func runTUI(client *tmuxCLI, startView viewID) error {
 			result, err = runUsageView(client, screen, usageModeCPU)
 		case viewMem:
 			result, err = runUsageView(client, screen, usageModeMem)
+		case viewAgents:
+			result, err = runUsageView(client, screen, usageModeAgents)
 		}
 		if err != nil {
 			return err
@@ -105,7 +117,7 @@ func runTUI(client *tmuxCLI, startView viewID) error {
 	}
 }
 
-// viewTabs renders the view tab bar, e.g. "tgo  [1:sessions]  2:cpu  3:mem".
+// viewTabs renders the view tab bar.
 func viewTabs(active viewID) string {
 	tabs := []struct {
 		key   string
@@ -115,6 +127,7 @@ func viewTabs(active viewID) string {
 		{"1", "sessions", viewDefault},
 		{"2", "cpu", viewCPU},
 		{"3", "mem", viewMem},
+		{"4", "agents", viewAgents},
 	}
 	parts := make([]string, len(tabs))
 	for i, tab := range tabs {
@@ -124,7 +137,7 @@ func viewTabs(active viewID) string {
 			parts[i] = fmt.Sprintf("%s:%s", tab.key, tab.label)
 		}
 	}
-	return "tgo  " + parts[0] + "  " + parts[1] + "  " + parts[2]
+	return "tgo  " + strings.Join(parts, "  ")
 }
 
 func SessionHotkeyAlphabet() string {
