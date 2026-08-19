@@ -72,10 +72,6 @@ func findHarnessPanes(harness string, panes []paneInfo, procs []procStat) []harn
 	return rows
 }
 
-func isCopilotProcess(proc procStat) bool {
-	return isHarnessProcess("copilot", proc)
-}
-
 func isHarnessProcess(harness string, proc procStat) bool {
 	if isTgoHarnessPicker(harness, proc.Command) {
 		return false
