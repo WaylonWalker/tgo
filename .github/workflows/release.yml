@@ -44,7 +44,7 @@ jobs:
           done
           sha256sum "$artifacts"/*.zip > "$artifacts/checksums.txt"
       - name: Publish release assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             artifacts/*.zip
