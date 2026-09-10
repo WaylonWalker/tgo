@@ -28,10 +28,10 @@ type agentHarness struct {
 }
 
 type agentSession struct {
-	ID        string          `json:"id"`
-	Metadata  json.RawMessage `json:"metadata,omitempty"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
+	ID        string              `json:"id"`
+	Metadata  json.RawMessage     `json:"metadata,omitempty"`
+	CreatedAt time.Time           `json:"created_at"`
+	UpdatedAt time.Time           `json:"updated_at"`
 	Runs      map[string]agentRun `json:"runs"`
 }
 

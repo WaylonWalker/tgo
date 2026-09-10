@@ -42,15 +42,15 @@ type windowUsage struct {
 	RSS           int64
 	TopCPUProcess string
 	TopMemProcess string
-	AgentStatus  string
-	AgentCommand string
-	AgentHarness string
+	AgentStatus   string
+	AgentCommand  string
+	AgentHarness  string
 	// CopilotStatus and CopilotCommand are retained for compatibility with the
 	// original Copilot picker data shape. New code uses the agent-prefixed fields.
 	CopilotStatus  string
 	CopilotCommand string
-	topCPU        float64
-	topMemRSS     int64
+	topCPU         float64
+	topMemRSS      int64
 }
 
 type usagePicker struct {
@@ -68,8 +68,8 @@ type usagePicker struct {
 	procTotals    usageTotals // totals across all processes
 	sysMemTotalKB int64
 	numCPU        int
-	listStart      int
-	listOffset     int
+	listStart     int
+	listOffset    int
 }
 
 func parseUsageMode(arg string) (usageMode, bool) {
@@ -138,8 +138,19 @@ func buildCopilotUsage(panes []paneInfo, procs []procStat) []windowUsage {
 }
 
 func buildAgentsUsage(panes []paneInfo, procs []procStat, registry agentRegistry) []windowUsage {
-	rows := buildHarnessUsage("copilot", panes, procs, registry)
-	rows = append(rows, buildHarnessUsage("opencode", panes, procs, registry)...)
+	rows := make([]windowUsage, 0)
+	known := make(map[string]bool)
+	for _, definition := range setupHarnessDefinitions() {
+		known[definition.ID] = true
+		rows = append(rows, buildHarnessUsage(definition.ID, panes, procs, registry)...)
+	}
+	// Preserve generic event integrations even when a harness was added by a
+	// newer setup version than this picker knows about.
+	for harness := range registry.Harnesses {
+		if !known[harness] {
+			rows = append(rows, buildHarnessUsage(harness, panes, procs, registry)...)
+		}
+	}
 	sortPaneUsage(rows, usageModeAgents)
 	return rows
 }
@@ -158,15 +169,15 @@ func buildHarnessUsage(harness string, panes []paneInfo, procs []procStat, regis
 	byTarget := make(map[string]int, len(matched))
 	for _, pane := range matched {
 		rows = append(rows, windowUsage{
-			Target:       pane.Target(),
-			SessionName:  pane.SessionName,
-			WindowIndex:  pane.WindowIndex,
-			WindowName:   pane.WindowName,
-			PaneIndex:    pane.PaneIndex,
-			Active:       pane.Active,
-			AgentStatus:  pane.Status,
-			AgentCommand: "",
-			AgentHarness: harness,
+			Target:         pane.Target(),
+			SessionName:    pane.SessionName,
+			WindowIndex:    pane.WindowIndex,
+			WindowName:     pane.WindowName,
+			PaneIndex:      pane.PaneIndex,
+			Active:         pane.Active,
+			AgentStatus:    pane.Status,
+			AgentCommand:   pane.Command,
+			AgentHarness:   harness,
 			CopilotStatus:  pane.Status,
 			CopilotCommand: pane.Command,
 		})

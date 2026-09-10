@@ -92,10 +92,29 @@ Both commands inspect tmux pane PIDs, sum descendant process usage per tmux pane
 tgo agents
 ```
 
-Opens one pane picker for all supported harnesses, currently Copilot and
-OpenCode. Each row identifies its harness and merges recorded lifecycle data
-when available. `tgo copilot` and `tgo opencode` remain command aliases for
-the unified picker.
+Opens one pane picker for all supported harnesses. Each row identifies its
+harness and merges recorded lifecycle data when available. `tgo copilot` and
+`tgo opencode` remain command aliases for the unified picker.
+
+## Agent integration setup
+
+```bash
+tgo setup
+```
+
+`setup` detects supported harnesses that are already installed, including
+OpenCode, Codex, Gemini CLI, GitHub Copilot, and Claude Code. It opens a small
+picker with every detected harness selected by default. Press `space` to
+toggle a harness, `a` to select all, or `n` to select none. Press `enter` to
+install or refresh the tgo lifecycle integration. Use `j/k` or arrow keys to
+move and `esc` to cancel.
+
+Detection checks for the harness executable on `PATH`. Setup only installs or
+updates tgo hooks and plugins. It never installs or updates a harness binary.
+
+Existing configuration is preserved and backed up before tgo changes it. A
+second `tgo setup` run reports integrations that are already up to date and
+does not rewrite them.
 
 ## Agent hook registry
 
@@ -122,6 +141,10 @@ Favorites persist even if a session is not currently running; missing favorites 
 Agent lifecycle data is stored atomically in:
 
 - `$XDG_STATE_HOME/tgo/agents.json` (falls back to `~/.local/state/tgo/agents.json`)
+
+Setup-managed hook scripts are stored in `$XDG_CONFIG_HOME/tgo/hooks` (falling
+back to `~/.config/tgo/hooks`). When setup changes an existing harness
+configuration, it keeps the first copy at `<file>.tgo.bak`.
 
 ## Local development
 

@@ -36,6 +36,17 @@ type runResult struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "setup" {
+		if len(os.Args) != 2 {
+			fmt.Fprintln(os.Stderr, "tgo: setup does not accept arguments")
+			os.Exit(2)
+		}
+		if err := runSetup(); err != nil {
+			fmt.Fprintf(os.Stderr, "tgo: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "agent" {
 		if err := runAgentCommand(os.Args[2:], os.Stdin); err != nil {
 			fmt.Fprintf(os.Stderr, "tgo: %v\n", err)
