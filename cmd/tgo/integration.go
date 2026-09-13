@@ -382,6 +382,9 @@ func managedOwnedFile(path string, version int, definition setupHarnessDefinitio
 }
 
 func historicalManagedSource(definition setupHarnessDefinition, path string, version int) (string, bool) {
+	if definition.Integration == integrationOpenCode && version == 4 {
+		return legacyOpenCodePluginSourceV4(), true
+	}
 	if version != 1 {
 		return "", false
 	}

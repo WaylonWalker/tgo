@@ -712,7 +712,7 @@ func limitRawEvent(raw json.RawMessage) json.RawMessage {
 	if len(raw) <= maxRawEventBytes {
 		return cloneJSON(raw)
 	}
-	return cloneJSON(raw[:maxRawEventBytes])
+	return json.RawMessage(fmt.Sprintf(`{"truncated":true,"original_bytes":%d}`, len(raw)))
 }
 
 func isTerminalAgentEvent(kind string) bool {

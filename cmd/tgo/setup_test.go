@@ -284,6 +284,13 @@ func TestOpenCodePluginSourceIsValidJavaScript(t *testing.T) {
 	if !strings.Contains(source, "await $`") || strings.Contains(source, "__TGO_TEMPLATE__") {
 		t.Fatalf("generated plugin does not contain the OpenCode shell hook: %s", source)
 	}
+	if !strings.Contains(source, "agent ingest opencode ${nativeKind} --json") ||
+		strings.Contains(source, "agent ingest opencode ${JSON.stringify(nativeKind)}") {
+		t.Fatalf("native event name is not passed as a Bun shell argument: %s", source)
+	}
+	if !strings.Contains(source, "// tgo integration version: 5") {
+		t.Fatalf("generated plugin has the wrong integration version: %s", source)
+	}
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node is not installed")
@@ -294,6 +301,16 @@ func TestOpenCodePluginSourceIsValidJavaScript(t *testing.T) {
 	}
 	if output, err := exec.Command(node, "--check", path).CombinedOutput(); err != nil {
 		t.Fatalf("generated plugin is invalid: %v\n%s", err, output)
+	}
+}
+
+func TestLegacyOpenCodeV4SourceUsesTheHistoricalCommand(t *testing.T) {
+	source := legacyOpenCodePluginSourceV4()
+	if !strings.Contains(source, "// tgo integration version: 4") {
+		t.Fatalf("historical plugin has the wrong integration version: %s", source)
+	}
+	if !strings.Contains(source, "agent ingest opencode ${JSON.stringify(nativeKind)} --json") {
+		t.Fatalf("historical plugin does not preserve its original command: %s", source)
 	}
 }
 

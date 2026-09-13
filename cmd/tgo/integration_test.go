@@ -86,6 +86,57 @@ func TestUninstallRefusesChangedManagedScript(t *testing.T) {
 	}
 }
 
+func TestSetupPreservesSymlinkedConfigurationPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
+	manager := &setupManager{home: home, lookPath: func(string) (string, error) { return "/fake/codex", nil }}
+	definition := setupDefinition("codex")
+	configPath := manager.configPath(definition.ID)
+	targetPath := filepath.Join(home, "shared", "codex-hooks.json")
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o700); err != nil {
+		t.Fatalf("create shared config directory: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatalf("create config directory: %v", err)
+	}
+	if err := os.WriteFile(targetPath, []byte(`{"hooks":{}}`), 0o600); err != nil {
+		t.Fatalf("write shared config: %v", err)
+	}
+	if err := os.Symlink(targetPath, configPath); err != nil {
+		t.Fatalf("create config symlink: %v", err)
+	}
+	results := manager.apply([]setupHarnessRow{{Definition: definition, Selected: true}})
+	if len(results) != 1 || results[0].Err != nil {
+		t.Fatalf("install through symlink = %+v", results)
+	}
+	info, err := os.Lstat(configPath)
+	if err != nil {
+		t.Fatalf("stat config symlink: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("configuration symlink was replaced: mode %v", info.Mode())
+	}
+	data, err := os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatalf("read shared config: %v", err)
+	}
+	if !strings.Contains(string(data), manager.hookScriptPath(definition.ID)) {
+		t.Fatalf("shared config was not updated: %s", data)
+	}
+}
+
+func TestHistoricalOpenCodeV4PluginRemainsOwned(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tgo-agent-state.js")
+	if err := os.WriteFile(path, []byte(legacyOpenCodePluginSourceV4()), 0o600); err != nil {
+		t.Fatalf("write historical plugin: %v", err)
+	}
+	definition := setupDefinition("opencode")
+	if !managedOwnedFile(path, 4, definition, openCodePluginSource()) {
+		t.Fatal("historical OpenCode v4 plugin was not recognized as tgo-owned")
+	}
+}
+
 func TestIntegrationReportSeparatesVerificationAndActiveReporting(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))

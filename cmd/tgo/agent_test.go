@@ -121,6 +121,38 @@ func TestParseAgentIngestCapturesNativeIdentityFields(t *testing.T) {
 	}
 }
 
+func TestOversizedRawPayloadIsStoredAsValidTruncationMarker(t *testing.T) {
+	store := &agentRegistryStore{path: filepath.Join(t.TempDir(), "agents.json")}
+	raw := json.RawMessage(`{"payload":"` + strings.Repeat("x", maxRawEventBytes) + `"}`)
+	if err := store.Apply(agentEventInput{
+		Harness:    "codex",
+		Kind:       "SessionStart",
+		NativeKind: "SessionStart",
+		SessionID:  "large-payload",
+		Data:       raw,
+	}); err != nil {
+		t.Fatalf("apply oversized payload: %v", err)
+	}
+	registry, err := store.Load()
+	if err != nil {
+		t.Fatalf("load oversized payload: %v", err)
+	}
+	events := registry.Harnesses["codex"].Sessions["large-payload"].Runs["large-payload"].Events
+	if len(events) != 1 || !json.Valid(events[0].Data) {
+		t.Fatalf("stored payload is not valid JSON: %+v", events)
+	}
+	var marker struct {
+		Truncated     bool `json:"truncated"`
+		OriginalBytes int  `json:"original_bytes"`
+	}
+	if err := json.Unmarshal(events[0].Data, &marker); err != nil {
+		t.Fatalf("decode truncation marker: %v", err)
+	}
+	if !marker.Truncated || marker.OriginalBytes != len(raw) {
+		t.Fatalf("truncation marker = %+v, want original size %d", marker, len(raw))
+	}
+}
+
 func TestAgentEventDescriptionUsesInitialPrompt(t *testing.T) {
 	got := agentEventDescription(json.RawMessage(`{"initialPrompt":"  Fix\n the  session picker  ","prompt":"ignored"}`))
 	if got != "Fix the session picker" {

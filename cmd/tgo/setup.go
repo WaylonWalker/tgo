@@ -76,7 +76,7 @@ func setupHarnessDefinitions() []setupHarnessDefinition {
 			Command:             "opencode",
 			Executables:         []string{"opencode"},
 			Integration:         integrationOpenCode,
-			IntegrationVersion:  4,
+			IntegrationVersion:  5,
 			LifecycleMode:       lifecycleAuthoritative,
 			LifecycleCapability: capabilityRich,
 			ScreenCapability:    capabilityBasic,
@@ -836,7 +836,11 @@ func writeManagedFile(path string, data []byte, mode os.FileMode) error {
 }
 
 func writeAtomicFile(path string, data []byte, mode os.FileMode) error {
-	dir := filepath.Dir(path)
+	target, err := atomicWriteTarget(path)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(target)
 	temp, err := os.CreateTemp(dir, ".tgo-setup-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create temporary file for %s: %w", path, err)
@@ -858,10 +862,32 @@ func writeAtomicFile(path string, data []byte, mode os.FileMode) error {
 	if err := temp.Close(); err != nil {
 		return fmt.Errorf("close %s: %w", path, err)
 	}
-	if err := os.Rename(tempPath, path); err != nil {
+	if err := os.Rename(tempPath, target); err != nil {
 		return fmt.Errorf("replace %s: %w", path, err)
 	}
 	return nil
+}
+
+func atomicWriteTarget(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return path, nil
+		}
+		return "", fmt.Errorf("inspect %s: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return path, nil
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", path, err)
+	}
+	target, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", fmt.Errorf("resolve symlink %s: %w", path, err)
+	}
+	return target, nil
 }
 
 func backupManagedFile(path string) error {
@@ -946,6 +972,18 @@ exit 0
 }
 
 func openCodePluginSource() string {
+	return openCodePluginSourceVersion(harnessIntegrationVersion("opencode"), false)
+}
+
+func legacyOpenCodePluginSourceV4() string {
+	return openCodePluginSourceVersion(4, true)
+}
+
+func openCodePluginSourceVersion(version int, quoteNativeKind bool) string {
+	nativeKindExpression := "${nativeKind}"
+	if quoteNativeKind {
+		nativeKindExpression = "${JSON.stringify(nativeKind)}"
+	}
 	source := fmt.Sprintf(`// %s%d
 const TGO = process.env.TGO_BIN || "tgo";
 const PANE = process.env.TMUX_PANE || "";
@@ -976,7 +1014,7 @@ async function report(event, id, summary, kind) {
   };
   if (summary) payload.summary = summary;
   try {
-    await $__TGO_TEMPLATE__${TGO} agent ingest opencode ${JSON.stringify(nativeKind)} --json ${JSON.stringify(payload)}__TGO_TEMPLATE__;
+    await $__TGO_TEMPLATE__${TGO} agent ingest opencode %s --json ${JSON.stringify(payload)}__TGO_TEMPLATE__;
   } catch {
     // Reporting must never interrupt an OpenCode session.
   }
@@ -1030,7 +1068,7 @@ export const TgoAgentStatePlugin = async ({ $ }) => ({
     }
   },
 });
-	`, managedIntegrationVersion, harnessIntegrationVersion("opencode"))
+	`, managedIntegrationVersion, version, nativeKindExpression)
 	return strings.ReplaceAll(source, "__TGO_TEMPLATE__", "`")
 }
 

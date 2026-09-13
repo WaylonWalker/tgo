@@ -143,13 +143,78 @@ func lifecyclePayloadIndicatesCancellation(input agentEventInput) bool {
 	if len(raw) == 0 {
 		raw = input.Data
 	}
-	value := strings.ToLower(string(raw))
-	for _, marker := range []string{"cancel", "cancelled", "canceled", "rejected", "denied"} {
-		if strings.Contains(value, marker) {
-			return true
+	if len(raw) == 0 || !json.Valid(raw) {
+		return false
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return false
+	}
+	return cancellationValue(value, "")
+}
+
+func cancellationValue(value any, key string) bool {
+	normalizedKey := strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(key))
+	switch typed := value.(type) {
+	case bool:
+		return typed && isCancellationBooleanField(normalizedKey)
+	case string:
+		return isCancellationStatusField(normalizedKey) && isCancellationStatus(typed)
+	case []any:
+		for _, item := range typed {
+			if cancellationValue(item, key) {
+				return true
+			}
+		}
+	case map[string]any:
+		for childKey, child := range typed {
+			normalizedChildKey := strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(childKey))
+			if isCancellationBooleanField(normalizedChildKey) ||
+				isCancellationStatusField(normalizedChildKey) ||
+				isCancellationContainer(normalizedChildKey) {
+				if cancellationValue(child, normalizedChildKey) {
+					return true
+				}
+			}
 		}
 	}
 	return false
+}
+
+func isCancellationBooleanField(key string) bool {
+	switch key {
+	case "cancelled", "canceled", "rejected", "denied":
+		return true
+	default:
+		return false
+	}
+}
+
+func isCancellationStatusField(key string) bool {
+	switch key {
+	case "status", "outcome", "result", "decision", "action", "permission", "elicitation":
+		return true
+	default:
+		return false
+	}
+}
+
+func isCancellationContainer(key string) bool {
+	switch key {
+	case "result", "outcome", "response", "permission", "elicitation", "decision":
+		return true
+	default:
+		return false
+	}
+}
+
+func isCancellationStatus(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "cancel", "cancelled", "canceled", "rejected", "denied", "declined", "permission-denied", "request-cancelled":
+		return true
+	default:
+		return false
+	}
 }
 
 func extractNativeAgentFields(input *agentEventInput) {
