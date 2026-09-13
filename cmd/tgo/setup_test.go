@@ -314,6 +314,18 @@ func TestLegacyOpenCodeV4SourceUsesTheHistoricalCommand(t *testing.T) {
 	}
 }
 
+func TestGeneratedHooksRetainLegacyPaneEnvironmentFallback(t *testing.T) {
+	if !strings.Contains(agentHookScript("codex"), "HERDR_PANE_ID") {
+		t.Fatal("shell hook dropped HERDR_PANE_ID fallback")
+	}
+	if !strings.Contains(agentHookPowerShellScript("copilot"), "HERDR_PANE_ID") {
+		t.Fatal("PowerShell hook dropped HERDR_PANE_ID fallback")
+	}
+	if !strings.Contains(openCodePluginSource(), "process.env.HERDR_PANE_ID") {
+		t.Fatal("OpenCode plugin dropped HERDR_PANE_ID fallback")
+	}
+}
+
 func TestAgentHookScriptIsValidShell(t *testing.T) {
 	sh, err := exec.LookPath("sh")
 	if err != nil {

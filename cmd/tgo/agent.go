@@ -299,35 +299,31 @@ func (s *agentRegistryStore) withLock(fn func() error) error {
 	}
 
 	lockPath := s.path + ".lock"
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err == nil {
-			defer func() {
-				_ = lock.Close()
-				_ = os.Remove(lockPath)
-			}()
-			return fn()
-		}
-		if !errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("lock agent registry: %w", err)
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("lock agent registry: timed out")
-		}
-		time.Sleep(20 * time.Millisecond)
+	lock, err := acquireFileLock(lockPath, 5*time.Second, "agent registry")
+	if err != nil {
+		return err
 	}
+	defer func() {
+		_ = lock.Close()
+		_ = os.Remove(lockPath)
+	}()
+	return fn()
 }
 
 func (s *agentRegistryStore) save(registry agentRegistry) error {
 	normalizeAgentRegistry(&registry)
-	data, err := json.MarshalIndent(registry, "", "  ")
+	data, err := marshalAgentRegistry(registry)
 	if err != nil {
-		return fmt.Errorf("marshal agent registry: %w", err)
+		return err
 	}
-	data = append(data, '\n')
-	if len(data) > maxAgentRegistryBytes {
-		return fmt.Errorf("agent registry exceeds %d-byte safety limit", maxAgentRegistryBytes)
+	for len(data) > maxAgentRegistryBytes {
+		if !pruneOldestAgentHistory(&registry) {
+			return fmt.Errorf("agent registry exceeds %d-byte safety limit", maxAgentRegistryBytes)
+		}
+		data, err = marshalAgentRegistry(registry)
+		if err != nil {
+			return err
+		}
 	}
 
 	dir := filepath.Dir(s.path)
@@ -356,6 +352,138 @@ func (s *agentRegistryStore) save(registry agentRegistry) error {
 		return fmt.Errorf("replace agent registry: %w", err)
 	}
 	return nil
+}
+
+func marshalAgentRegistry(registry agentRegistry) ([]byte, error) {
+	data, err := json.MarshalIndent(registry, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal agent registry: %w", err)
+	}
+	return append(data, '\n'), nil
+}
+
+func pruneOldestAgentHistory(registry *agentRegistry) bool {
+	protected := make(map[string]bool, len(registry.Active))
+	for _, active := range registry.Active {
+		if active.Harness != "" && active.SessionID != "" && active.RunKey != "" {
+			protected[agentRunReferenceKey(active.Harness, active.SessionID, active.RunKey)] = true
+		}
+	}
+
+	var oldestHarness, oldestSession, oldestRun string
+	var oldestAt time.Time
+	foundRun := false
+	for harnessName, harness := range registry.Harnesses {
+		for sessionID, session := range harness.Sessions {
+			for runID, run := range session.Runs {
+				if protected[agentRunReferenceKey(harnessName, sessionID, runID)] {
+					continue
+				}
+				at := run.UpdatedAt
+				if at.IsZero() {
+					at = run.StartedAt
+				}
+				if !foundRun || at.Before(oldestAt) {
+					foundRun = true
+					oldestHarness = harnessName
+					oldestSession = sessionID
+					oldestRun = runID
+					oldestAt = at
+				}
+			}
+		}
+	}
+	if foundRun {
+		harness := registry.Harnesses[oldestHarness]
+		session := harness.Sessions[oldestSession]
+		delete(session.Runs, oldestRun)
+		if len(session.Runs) == 0 {
+			delete(harness.Sessions, oldestSession)
+		} else {
+			harness.Sessions[oldestSession] = session
+		}
+		if len(harness.Sessions) == 0 {
+			delete(registry.Harnesses, oldestHarness)
+		} else {
+			registry.Harnesses[oldestHarness] = harness
+		}
+		pruneDanglingAgentActives(registry)
+		return true
+	}
+
+	var eventHarness, eventSession, eventRun string
+	oldestEvent := -1
+	var oldestEventAt time.Time
+	for harnessName, harness := range registry.Harnesses {
+		for sessionID, session := range harness.Sessions {
+			for runID, run := range session.Runs {
+				if len(run.Events) == 0 {
+					continue
+				}
+				for index, event := range run.Events {
+					at := event.At
+					if at.IsZero() {
+						at = run.UpdatedAt
+					}
+					if oldestEvent == -1 || at.Before(oldestEventAt) {
+						eventHarness = harnessName
+						eventSession = sessionID
+						eventRun = runID
+						oldestEvent = index
+						oldestEventAt = at
+					}
+				}
+			}
+		}
+	}
+	if oldestEvent >= 0 {
+		harness := registry.Harnesses[eventHarness]
+		session := harness.Sessions[eventSession]
+		run := session.Runs[eventRun]
+		run.Events = append(run.Events[:oldestEvent], run.Events[oldestEvent+1:]...)
+		session.Runs[eventRun] = run
+		harness.Sessions[eventSession] = session
+		registry.Harnesses[eventHarness] = harness
+		return true
+	}
+
+	var oldestActive string
+	var oldestActiveAt time.Time
+	foundActive := false
+	for key, active := range registry.Active {
+		if !foundActive || active.UpdatedAt.Before(oldestActiveAt) {
+			oldestActive = key
+			oldestActiveAt = active.UpdatedAt
+			foundActive = true
+		}
+	}
+	if foundActive {
+		delete(registry.Active, oldestActive)
+		return true
+	}
+	return false
+}
+
+func agentRunReferenceKey(harness, session, run string) string {
+	return strings.Join([]string{harness, session, run}, "\x00")
+}
+
+func pruneDanglingAgentActives(registry *agentRegistry) {
+	for key, active := range registry.Active {
+		harness, ok := registry.Harnesses[active.Harness]
+		if !ok {
+			delete(registry.Active, key)
+			continue
+		}
+		session, ok := harness.Sessions[active.SessionID]
+		if !ok {
+			delete(registry.Active, key)
+			continue
+		}
+		if _, ok := session.Runs[active.RunKey]; !ok {
+			delete(registry.Active, key)
+		}
+	}
 }
 
 func newAgentRegistry() agentRegistry {

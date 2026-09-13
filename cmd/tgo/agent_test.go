@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -150,6 +151,47 @@ func TestOversizedRawPayloadIsStoredAsValidTruncationMarker(t *testing.T) {
 	}
 	if !marker.Truncated || marker.OriginalBytes != len(raw) {
 		t.Fatalf("truncation marker = %+v, want original size %d", marker, len(raw))
+	}
+}
+
+func TestAgentRegistryPrunesOldHistoryBeforeRejectingOversize(t *testing.T) {
+	store := &agentRegistryStore{path: filepath.Join(t.TempDir(), "agents.json")}
+	registry := newAgentRegistry()
+	registry.Harnesses["codex"] = agentHarness{Sessions: make(map[string]agentSession)}
+	base := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	payload := json.RawMessage(`{"payload":"` + strings.Repeat("x", 14_000) + `"}`)
+	for index := 0; index < 600; index++ {
+		id := fmt.Sprintf("session-%03d", index)
+		at := base.Add(time.Duration(index) * time.Second)
+		registry.Harnesses["codex"].Sessions[id] = agentSession{
+			ID: id,
+			Runs: map[string]agentRun{
+				id: {
+					ID:        id,
+					Status:    "idle",
+					StartedAt: at,
+					UpdatedAt: at,
+					Events:    []agentEvent{{At: at, Data: payload}},
+				},
+			},
+		}
+	}
+	if err := store.save(registry); err != nil {
+		t.Fatalf("save oversized registry: %v", err)
+	}
+	info, err := os.Stat(store.path)
+	if err != nil {
+		t.Fatalf("stat pruned registry: %v", err)
+	}
+	if info.Size() > maxAgentRegistryBytes {
+		t.Fatalf("registry size = %d, exceeds %d", info.Size(), maxAgentRegistryBytes)
+	}
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatalf("load pruned registry: %v", err)
+	}
+	if len(loaded.Harnesses["codex"].Sessions) >= 600 {
+		t.Fatal("old registry history was not pruned")
 	}
 }
 

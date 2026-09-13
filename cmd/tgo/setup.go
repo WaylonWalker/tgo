@@ -356,20 +356,7 @@ func (m *setupManager) applyUnlocked(rows []setupHarnessRow) []setupResult {
 }
 
 func acquireSetupLock(path string) (*os.File, error) {
-	deadline := time.Now().Add(setupLockTimeout)
-	for {
-		lock, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err == nil {
-			return lock, nil
-		}
-		if !errors.Is(err, os.ErrExist) {
-			return nil, fmt.Errorf("lock setup: %w", err)
-		}
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("lock setup: timed out")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	return acquireFileLock(path, setupLockTimeout, "setup")
 }
 
 func setupLockResults(rows []setupHarnessRow, err error) []setupResult {
@@ -920,7 +907,7 @@ set -eu
 event="${1:-}"
 [ -n "$event" ] || exit 0
 
-pane="${TMUX_PANE:-}"
+pane="${TMUX_PANE:-${HERDR_PANE_ID:-}}"
 if [ -z "$pane" ] && command -v tmux >/dev/null 2>&1; then
     pane="$(tmux display-message -p '#{pane_id}' 2>/dev/null || true)"
 fi
@@ -950,6 +937,9 @@ if ([string]::IsNullOrWhiteSpace($Kind)) {
 }
 
 $Pane = $env:TMUX_PANE
+if ([string]::IsNullOrWhiteSpace($Pane)) {
+    $Pane = $env:HERDR_PANE_ID
+}
 if ([string]::IsNullOrWhiteSpace($Pane) -and (Get-Command tmux -ErrorAction SilentlyContinue)) {
     $Pane = (& tmux display-message -p '#{pane_id}' 2>$null).Trim()
 }
@@ -986,7 +976,7 @@ func openCodePluginSourceVersion(version int, quoteNativeKind bool) string {
 	}
 	source := fmt.Sprintf(`// %s%d
 const TGO = process.env.TGO_BIN || "tgo";
-const PANE = process.env.TMUX_PANE || "";
+const PANE = process.env.TMUX_PANE || process.env.HERDR_PANE_ID || "";
 const children = new Set();
 
 function sessionID(properties) {
