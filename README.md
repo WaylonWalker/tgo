@@ -116,19 +116,50 @@ Existing configuration is preserved and backed up before tgo changes it. A
 second `tgo setup` run reports integrations that are already up to date and
 does not rewrite them.
 
+The integration manager also supports non-interactive inspection and changes:
+
+```bash
+tgo integration list
+tgo integration status
+tgo integration status --json
+tgo integration install codex
+tgo integration install --all-detected
+tgo integration update
+tgo integration uninstall codex
+tgo integration doctor codex
+tgo setup --all --yes
+tgo setup --dry-run
+```
+
+`status` separates installed files, configured hook wiring, local ingestion
+verification, and recent active reporting. `doctor` never claims that a
+harness-side event was tested unless tgo received one. Uninstall removes only
+tgo-owned entries and managed files. It does not restore a backup over current
+configuration.
+
 ## Agent hook registry
 
 Hook integrations can write generic lifecycle events without a database:
 
 ```bash
 printf '%s\n' '{"sessionId":"session-1","extra":{"source":"hook"}}' |
-  tgo agent event --harness copilot --kind session-start --pane %4 --pid 1234
+  tgo agent ingest copilot sessionStart --pane %4 --pid 1234
 ```
 
-`--harness`, `--kind`, `--session`, `--run`, `--pane`, `--pid`, `--summary`,
-and `--json` are parsed strictly; a JSON object can be supplied on stdin or
-with `--json`. A missing run ID defaults to the pane (then PID, then session).
-The original JSON payload is retained with the event.
+`agent ingest` accepts a harness and native event name, then reads the native
+JSON object from stdin or `--json`. It captures session ID, turn ID, cwd,
+transcript ID, timestamps, and the bounded raw payload when available. The
+older `agent event` form remains supported for compatibility.
+
+To inspect the evidence for a live pane:
+
+```bash
+tgo agent explain %7
+```
+
+The normal agent picker remains compact. It reports `unknown` when a detected
+agent has no trustworthy lifecycle or screen evidence. Unix process states such
+as `S` and `R` are diagnostics, not agent states.
 
 ## State storage
 
@@ -144,7 +175,9 @@ Agent lifecycle data is stored atomically in:
 
 Setup-managed hook scripts are stored in `$XDG_CONFIG_HOME/tgo/hooks` (falling
 back to `~/.config/tgo/hooks`). When setup changes an existing harness
-configuration, it keeps the first copy at `<file>.tgo.bak`.
+configuration, it keeps the first copy at `<file>.tgo.bak`. The registry uses a
+generation-aware schema and keeps a one-time `agents.json.v1.bak` when it
+migrates an older registry.
 
 ## Local development
 

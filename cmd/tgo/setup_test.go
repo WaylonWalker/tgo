@@ -70,7 +70,7 @@ func TestMergeHarnessHooksPreservesOtherHooks(t *testing.T) {
 		t.Fatalf("existing hook was removed: %s", text)
 	}
 	for _, spec := range definition.HookSpecs {
-		if !strings.Contains(text, hookCommand(scriptPath, spec.Kind)) {
+		if !strings.Contains(text, hookCommand(scriptPath, spec.Event)) {
 			t.Errorf("missing %s hook in %s", spec.Event, text)
 		}
 	}
@@ -206,7 +206,7 @@ func TestSetupManagerWritesEverySupportedIntegrationShape(t *testing.T) {
 	}
 	for _, definition := range setupHarnessDefinitions() {
 		var status setupStatus
-		if definition.OpenCode {
+		if definition.Integration == integrationOpenCode {
 			status, _ = manager.inspectOpenCode()
 		} else {
 			status, _ = manager.inspect(definition)
@@ -257,6 +257,25 @@ func TestSetupDoesNotOverwriteUnmanagedOpenCodePlugin(t *testing.T) {
 	}
 	if string(data) != string(original) {
 		t.Fatalf("unmanaged plugin changed: %s", data)
+	}
+}
+
+func TestSetupRefusesChangedCurrentHook(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
+	manager := &setupManager{home: home}
+	definition := setupDefinition("codex")
+	path := manager.hookScriptPath(definition.ID)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("create hook directory: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(agentHookScript(definition.ID)+"\n# changed\n"), 0o700); err != nil {
+		t.Fatalf("write changed hook: %v", err)
+	}
+	status, detail := manager.inspect(definition)
+	if status != setupStatusConflict || !strings.Contains(detail, "changed") {
+		t.Fatalf("changed current hook status = (%d, %q), want conflict", status, detail)
 	}
 }
 
@@ -324,7 +343,7 @@ func TestAgentHookScriptForwardsHarnessPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read forwarded args: %v", err)
 	}
-	for _, expected := range []string{"agent event", "--harness codex", "--kind session-start", "--pane %7"} {
+	for _, expected := range []string{"agent ingest codex session-start", "--pane %7"} {
 		if !strings.Contains(string(args), expected) {
 			t.Errorf("forwarded args %q do not contain %q", args, expected)
 		}
@@ -335,6 +354,55 @@ func TestAgentHookScriptForwardsHarnessPayload(t *testing.T) {
 	}
 	if string(input) != `{"session_id":"codex-session"}` {
 		t.Fatalf("hook payload = %q", input)
+	}
+}
+
+func TestCopilotPowerShellHookForwardsHarnessPayload(t *testing.T) {
+	powershell, err := exec.LookPath("pwsh")
+	if err != nil {
+		powershell, err = exec.LookPath("powershell")
+	}
+	if err != nil {
+		t.Skip("PowerShell is not installed")
+	}
+	tempDir := t.TempDir()
+	fakeTgo := filepath.Join(tempDir, "tgo")
+	argsPath := filepath.Join(tempDir, "args")
+	inputPath := filepath.Join(tempDir, "input")
+	fakeSource := "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$TGO_CAPTURE_ARGS\"\ncat > \"$TGO_CAPTURE_INPUT\"\n"
+	if err := os.WriteFile(fakeTgo, []byte(fakeSource), 0o700); err != nil {
+		t.Fatalf("write fake tgo: %v", err)
+	}
+	hookPath := filepath.Join(tempDir, "copilot.ps1")
+	if err := os.WriteFile(hookPath, []byte(agentHookPowerShellScript("copilot")), 0o600); err != nil {
+		t.Fatalf("write PowerShell hook: %v", err)
+	}
+	command := exec.Command(powershell, "-NoProfile", "-File", hookPath, "sessionStart")
+	command.Stdin = strings.NewReader(`{"sessionId":"copilot-session","turnId":"turn-1"}`)
+	command.Env = append(os.Environ(),
+		"TGO_BIN="+fakeTgo,
+		"TGO_CAPTURE_ARGS="+argsPath,
+		"TGO_CAPTURE_INPUT="+inputPath,
+		"TMUX_PANE=%8",
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("run PowerShell hook: %v\n%s", err, output)
+	}
+	input, err := os.ReadFile(inputPath)
+	if err != nil {
+		t.Fatalf("read forwarded PowerShell payload: %v", err)
+	}
+	if string(input) != `{"sessionId":"copilot-session","turnId":"turn-1"}` {
+		t.Fatalf("PowerShell hook payload = %q", input)
+	}
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatalf("read PowerShell hook arguments: %v", err)
+	}
+	for _, expected := range []string{"agent ingest copilot sessionStart", "--pane %8"} {
+		if !strings.Contains(string(args), expected) {
+			t.Errorf("PowerShell hook arguments %q do not contain %q", args, expected)
+		}
 	}
 }
 

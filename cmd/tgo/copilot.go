@@ -7,19 +7,16 @@ import (
 
 type harnessPane struct {
 	paneInfo
-	PID     int
-	Status  string
-	Command string
+	PID          int
+	Status       string // scheduler state; diagnostic only
+	ProcessStart string
+	Command      string
 }
 
 type copilotPane = harnessPane
 
 func findCopilotPanes(panes []paneInfo, procs []procStat) []copilotPane {
 	return findHarnessPanes("copilot", panes, procs)
-}
-
-func findOpenCodePanes(panes []paneInfo, procs []procStat) []harnessPane {
-	return findHarnessPanes("opencode", panes, procs)
 }
 
 func findHarnessPanes(harness string, panes []paneInfo, procs []procStat) []harnessPane {
@@ -63,10 +60,11 @@ func findHarnessPanes(harness string, panes []paneInfo, procs []procStat) []harn
 			}
 		}
 		rows = append(rows, harnessPane{
-			paneInfo: pane,
-			PID:      match.PID,
-			Status:   processStatus(match.State),
-			Command:  processCommand(match),
+			paneInfo:     pane,
+			PID:          match.PID,
+			Status:       processStatus(match.State),
+			ProcessStart: match.StartTime,
+			Command:      processCommand(match),
 		})
 	}
 	return rows
@@ -76,7 +74,15 @@ func isHarnessProcess(harness string, proc procStat) bool {
 	if isTgoHarnessPicker(harness, proc.Command) {
 		return false
 	}
-	return strings.Contains(strings.ToLower(proc.Comm+" "+proc.Command), strings.ToLower(harness))
+	definition := harnessDefinitionByID(harness)
+	command := strings.ToLower(proc.Comm + " " + proc.Command)
+	for _, executable := range definition.Executables {
+		if strings.Contains(command, strings.ToLower(executable)) {
+			return true
+		}
+	}
+	// Preserve discovery for a harness recorded by a newer tgo version.
+	return strings.Contains(command, strings.ToLower(harness))
 }
 
 func isTgoHarnessPicker(harness string, command string) bool {

@@ -50,7 +50,7 @@ func TestAgentRegistryPersistsAndUpdatesRunBySessionAndPane(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read persisted registry: %v", err)
 	}
-	if !strings.Contains(string(data), `"version": 1`) {
+	if !strings.Contains(string(data), `"version": 2`) {
 		t.Fatalf("missing registry version: %s", data)
 	}
 }
@@ -102,6 +102,22 @@ func TestParseAgentEventArgsRejectsUnknownFlagAndConflicts(t *testing.T) {
 		strings.NewReader(""),
 	); err == nil {
 		t.Fatal("conflicting flag and JSON were accepted")
+	}
+}
+
+func TestParseAgentIngestCapturesNativeIdentityFields(t *testing.T) {
+	input, err := parseAgentIngestArgs(
+		[]string{"codex", "PermissionRequest", "--pane", "%4", "--pid", "123", "--turn", "turn-7"},
+		strings.NewReader(`{"session_id":"session-1","cwd":"/work","permission_id":"perm-1","timestamp":"2026-09-13T12:00:00Z"}`),
+	)
+	if err != nil {
+		t.Fatalf("parse ingest: %v", err)
+	}
+	if input.Harness != "codex" || input.NativeKind != "PermissionRequest" || input.SessionID != "session-1" || input.TurnID != "turn-7" {
+		t.Fatalf("native identity fields missing: %+v", input)
+	}
+	if input.CWD != "/work" || input.PermissionID != "perm-1" || input.At.IsZero() {
+		t.Fatalf("native context fields missing: %+v", input)
 	}
 }
 

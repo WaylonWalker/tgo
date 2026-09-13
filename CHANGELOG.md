@@ -8,6 +8,8 @@ All notable changes to `tgo` will be documented in this file. This project adher
 - `tgo setup` detects installed agent harnesses and opens a picker with all detected harnesses selected by default.
 - managed, versioned lifecycle integrations for OpenCode, Codex, Gemini CLI, GitHub Copilot, and Claude Code.
 - generic agent-pane discovery for every supported harness and safe backups for changed harness configuration files.
+- generation-aware agent identities, normalized lifecycle ingestion, screen fallback, and `tgo agent explain`.
+- integration status, install, update, uninstall, and doctor commands with JSON output.
 
 ## [0.4.0] - 2026-04-06
 
