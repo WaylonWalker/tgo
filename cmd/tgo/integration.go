@@ -242,8 +242,7 @@ func (m *setupManager) uninstall(definitions []setupHarnessDefinition) []setupRe
 		return setupLockResultsForDefinitions(definitions, err)
 	}
 	defer func() {
-		_ = lock.Close()
-		_ = os.Remove(lockPath)
+		_ = lock.Release()
 	}()
 	results := make([]setupResult, 0, len(definitions))
 	for _, definition := range definitions {

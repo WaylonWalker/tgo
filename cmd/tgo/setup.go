@@ -325,8 +325,7 @@ func (m *setupManager) apply(rows []setupHarnessRow) []setupResult {
 		return setupLockResults(rows, err)
 	}
 	defer func() {
-		_ = lock.Close()
-		_ = os.Remove(lockPath)
+		_ = lock.Release()
 	}()
 	return m.applyUnlocked(rows)
 }
@@ -355,7 +354,7 @@ func (m *setupManager) applyUnlocked(rows []setupHarnessRow) []setupResult {
 	return results
 }
 
-func acquireSetupLock(path string) (*os.File, error) {
+func acquireSetupLock(path string) (*fileLock, error) {
 	return acquireFileLock(path, setupLockTimeout, "setup")
 }
 
