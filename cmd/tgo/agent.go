@@ -146,6 +146,7 @@ type agentRun struct {
 	LifecycleState agentState      `json:"lifecycle_state,omitempty"`
 	LifecycleAt    time.Time       `json:"lifecycle_at,omitempty"`
 	NativeKind     string          `json:"native_kind,omitempty"`
+	NativeEvent    bool            `json:"native_event,omitempty"`
 	Legacy         bool            `json:"legacy,omitempty"`
 	CWD            string          `json:"cwd,omitempty"`
 	TranscriptID   string          `json:"transcript_id,omitempty"`
@@ -640,6 +641,9 @@ func (registry *agentRegistry) apply(input agentEventInput) {
 			run.Status = input.Kind
 		}
 		run.NativeKind = transition.NativeKind
+	}
+	if accepted && input.NativeKind != "" {
+		run.NativeEvent = true
 	}
 	if input.Pane != "" {
 		run.Pane = input.Pane

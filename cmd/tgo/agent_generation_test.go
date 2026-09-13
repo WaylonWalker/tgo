@@ -94,6 +94,25 @@ func TestTerminalLifecycleEventRemovesActiveGeneration(t *testing.T) {
 	}
 }
 
+func TestNativePaneLifecycleWithoutPIDUsesSessionIdentity(t *testing.T) {
+	registry := newAgentRegistry()
+	base := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	registry.apply(agentEventInput{
+		Harness: "copilot", Kind: "sessionStart", NativeKind: "sessionStart", SessionID: "session-1",
+		Pane: "%8", At: base,
+	})
+	evidence := resolveAgentEvidence(
+		setupDefinition("copilot"),
+		agentIdentity{Harness: "copilot", Pane: "%8", PID: 300, ProcessStart: "linux-start"},
+		agentRunsForHarness(registry, "copilot"),
+		"",
+		base.Add(time.Second),
+	)
+	if evidence.State != agentStateIdle || evidence.Authority != authorityLifecycle {
+		t.Fatalf("native no-PID evidence = (%q, %q), want (idle, lifecycle)", evidence.State, evidence.Authority)
+	}
+}
+
 func TestLegacyPaneOnlyLifecycleIsNotAuthoritativeWhenStartTokenIsKnown(t *testing.T) {
 	registry := newAgentRegistry()
 	registry.apply(agentEventInput{

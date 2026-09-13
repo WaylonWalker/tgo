@@ -45,9 +45,10 @@ func resolveAgentEvidence(definition setupHarnessDefinition, live agentIdentity,
 		if state == agentStateUnknown {
 			continue
 		}
-		if live.ProcessStart != "" && candidate.Identity.ProcessStart == "" {
-			// A v1 pane-only record cannot be safely attached to a process
-			// generation that exposes a start token.
+		if live.ProcessStart != "" && candidate.Identity.ProcessStart == "" && !candidate.NativeEvent {
+			// A legacy pane-only record cannot be safely attached to a process
+			// generation that exposes a start token. Native events without a PID
+			// remain usable on platforms where hook processes are ephemeral.
 			continue
 		}
 		copy := candidate
