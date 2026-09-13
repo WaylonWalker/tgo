@@ -385,6 +385,9 @@ func historicalManagedSource(definition setupHarnessDefinition, path string, ver
 	if definition.Integration == integrationOpenCode && version == 4 {
 		return legacyOpenCodePluginSourceV4(), true
 	}
+	if definition.ID == "copilot" && version == 2 && strings.HasSuffix(path, ".ps1") {
+		return legacyAgentHookPowerShellScriptV2(definition.ID), true
+	}
 	if version != 1 {
 		return "", false
 	}

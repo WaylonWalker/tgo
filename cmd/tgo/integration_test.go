@@ -137,6 +137,17 @@ func TestHistoricalOpenCodeV4PluginRemainsOwned(t *testing.T) {
 	}
 }
 
+func TestHistoricalCopilotV2PowerShellHookRemainsOwned(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tgo-copilot.ps1")
+	if err := os.WriteFile(path, []byte(legacyAgentHookPowerShellScriptV2("copilot")), 0o600); err != nil {
+		t.Fatalf("write historical Copilot hook: %v", err)
+	}
+	definition := setupDefinition("copilot")
+	if !managedOwnedFile(path, 2, definition, agentHookPowerShellScript("copilot")) {
+		t.Fatal("historical Copilot v2 hook was not recognized as tgo-owned")
+	}
+}
+
 func TestIntegrationReportSeparatesVerificationAndActiveReporting(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))

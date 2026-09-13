@@ -314,12 +314,25 @@ func TestLegacyOpenCodeV4SourceUsesTheHistoricalCommand(t *testing.T) {
 	}
 }
 
+func TestLegacyCopilotV2PowerShellSourcePreservesEphemeralPIDCommand(t *testing.T) {
+	source := legacyAgentHookPowerShellScriptV2("copilot")
+	if !strings.Contains(source, "# tgo integration version: 2") || !strings.Contains(source, "--pid $PID") {
+		t.Fatalf("historical Copilot v2 source changed: %s", source)
+	}
+}
+
 func TestGeneratedHooksRetainLegacyPaneEnvironmentFallback(t *testing.T) {
 	if !strings.Contains(agentHookScript("codex"), "HERDR_PANE_ID") {
 		t.Fatal("shell hook dropped HERDR_PANE_ID fallback")
 	}
 	if !strings.Contains(agentHookPowerShellScript("copilot"), "HERDR_PANE_ID") {
 		t.Fatal("PowerShell hook dropped HERDR_PANE_ID fallback")
+	}
+	if strings.Contains(agentHookPowerShellScript("copilot"), "--pid $PID") {
+		t.Fatal("PowerShell hook uses an ephemeral hook-process PID")
+	}
+	if !strings.Contains(agentHookPowerShellScript("copilot"), "# tgo integration version: 3") {
+		t.Fatal("PowerShell hook did not advance its integration version")
 	}
 	if !strings.Contains(openCodePluginSource(), "process.env.HERDR_PANE_ID") {
 		t.Fatal("OpenCode plugin dropped HERDR_PANE_ID fallback")

@@ -131,7 +131,7 @@ func setupHarnessDefinitions() []setupHarnessDefinition {
 			Command:             "copilot",
 			Executables:         []string{"copilot"},
 			Integration:         integrationJSONPlugin,
-			IntegrationVersion:  2,
+			IntegrationVersion:  3,
 			LifecycleMode:       lifecycleHybrid,
 			LifecycleCapability: capabilityRich,
 			ScreenCapability:    capabilityBasic,
@@ -952,12 +952,49 @@ if ([string]::IsNullOrWhiteSpace($Tgo)) {
 try {
     & $Tgo agent ingest %s $Kind __PS_CONT__
         --pane $Pane __PS_CONT__
-        --pid $PID 2>$null | Out-Null
+        2>$null | Out-Null
 } catch {
     # Reporting must never interrupt the harness session.
 }
 exit 0
 	`, managedIntegrationVersion, harnessIntegrationVersion(harness), harness)
+	return strings.ReplaceAll(source, "__PS_CONT__", "`")
+}
+
+func legacyAgentHookPowerShellScriptV2(harness string) string {
+	source := fmt.Sprintf(`# %s%d
+
+param(
+    [Parameter(Position = 0)]
+    [string]$Kind
+)
+
+if ([string]::IsNullOrWhiteSpace($Kind)) {
+    exit 0
+}
+
+$Pane = $env:TMUX_PANE
+if ([string]::IsNullOrWhiteSpace($Pane)) {
+    $Pane = $env:HERDR_PANE_ID
+}
+if ([string]::IsNullOrWhiteSpace($Pane) -and (Get-Command tmux -ErrorAction SilentlyContinue)) {
+    $Pane = (& tmux display-message -p '#{pane_id}' 2>$null).Trim()
+}
+
+$Tgo = $env:TGO_BIN
+if ([string]::IsNullOrWhiteSpace($Tgo)) {
+    $Tgo = "tgo"
+}
+
+try {
+    & $Tgo agent ingest %s $Kind __PS_CONT__
+        --pane $Pane __PS_CONT__
+        --pid $PID 2>$null | Out-Null
+} catch {
+    # Reporting must never interrupt the harness session.
+}
+exit 0
+`, managedIntegrationVersion, 2, harness)
 	return strings.ReplaceAll(source, "__PS_CONT__", "`")
 }
 
