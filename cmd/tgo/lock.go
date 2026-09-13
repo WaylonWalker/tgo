@@ -65,9 +65,16 @@ func createFileLock(path string) (*os.File, error) {
 }
 
 func recoverStaleFileLock(path string) bool {
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if err != nil {
 		return errors.Is(err, os.ErrNotExist)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		if _, targetErr := os.Stat(path); !errors.Is(targetErr, os.ErrNotExist) {
+			return false
+		}
+		removeErr := os.Remove(path)
+		return removeErr == nil || errors.Is(removeErr, os.ErrNotExist)
 	}
 	data, readErr := os.ReadFile(path)
 	var owner fileLockOwner

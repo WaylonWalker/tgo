@@ -57,3 +57,26 @@ func TestAcquireFileLockDoesNotStealLiveProcessLock(t *testing.T) {
 		t.Fatalf("live lock result = %v, want timeout", err)
 	}
 }
+
+func TestAcquireFileLockRemovesDanglingSymlink(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.lock")
+	if err := os.Symlink(filepath.Join(dir, "missing"), path); err != nil {
+		t.Fatalf("create dangling lock symlink: %v", err)
+	}
+	lock, err := acquireFileLock(path, time.Second, "test")
+	if err != nil {
+		t.Fatalf("acquire through dangling lock symlink: %v", err)
+	}
+	defer func() {
+		_ = lock.Close()
+		_ = os.Remove(path)
+	}()
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("stat recovered lock: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("dangling lock symlink was not replaced")
+	}
+}

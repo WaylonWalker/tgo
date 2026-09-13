@@ -75,6 +75,25 @@ func TestNativeSessionChangeRejectsLateLifecycleEvent(t *testing.T) {
 	}
 }
 
+func TestTerminalLifecycleEventRemovesActiveGeneration(t *testing.T) {
+	registry := newAgentRegistry()
+	base := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	registry.apply(agentEventInput{
+		Harness: "opencode", Kind: "session.created", NativeKind: "session.created", SessionID: "session-1",
+		RunID: "run-1", Pane: "%8", PID: 300, ProcessStart: "start-1", At: base,
+	})
+	if len(registry.Active) != 1 {
+		t.Fatalf("active generations after start = %d, want 1", len(registry.Active))
+	}
+	registry.apply(agentEventInput{
+		Harness: "opencode", Kind: "session.deleted", NativeKind: "session.deleted", SessionID: "session-1",
+		RunID: "run-1", Pane: "%8", PID: 300, ProcessStart: "start-1", At: base.Add(time.Second),
+	})
+	if len(registry.Active) != 0 {
+		t.Fatalf("active generations after terminal event = %d, want 0", len(registry.Active))
+	}
+}
+
 func TestLegacyPaneOnlyLifecycleIsNotAuthoritativeWhenStartTokenIsKnown(t *testing.T) {
 	registry := newAgentRegistry()
 	registry.apply(agentEventInput{

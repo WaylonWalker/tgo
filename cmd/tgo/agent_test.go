@@ -176,8 +176,23 @@ func TestAgentRegistryPrunesOldHistoryBeforeRejectingOversize(t *testing.T) {
 			},
 		}
 	}
-	if err := store.save(registry); err != nil {
-		t.Fatalf("save oversized registry: %v", err)
+	data, err := marshalAgentRegistry(registry)
+	if err != nil {
+		t.Fatalf("marshal oversized registry: %v", err)
+	}
+	if len(data) <= maxAgentRegistryBytes {
+		t.Fatalf("test registry size = %d, want more than %d", len(data), maxAgentRegistryBytes)
+	}
+	if err := os.WriteFile(store.path, data, 0o600); err != nil {
+		t.Fatalf("write oversized registry: %v", err)
+	}
+	if err := store.Apply(agentEventInput{
+		Harness:    "codex",
+		Kind:       "SessionStart",
+		NativeKind: "SessionStart",
+		SessionID:  "current",
+	}); err != nil {
+		t.Fatalf("recover oversized registry: %v", err)
 	}
 	info, err := os.Stat(store.path)
 	if err != nil {

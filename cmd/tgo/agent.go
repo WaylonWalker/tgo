@@ -19,6 +19,7 @@ const (
 	maxAgentEvents        = 128
 	maxRawEventBytes      = 16 * 1024
 	maxAgentRegistryBytes = 8 * 1024 * 1024
+	maxAgentReadBytes     = 64 * 1024 * 1024
 )
 
 type agentState string
@@ -105,15 +106,16 @@ type agentRegistry struct {
 }
 
 type agentActive struct {
-	Harness     string    `json:"harness"`
-	TmuxServer  string    `json:"tmux_server,omitempty"`
-	TmuxSession string    `json:"tmux_session,omitempty"`
-	Pane        string    `json:"pane,omitempty"`
-	PID         int       `json:"pid,omitempty"`
-	Generation  string    `json:"generation,omitempty"`
-	SessionID   string    `json:"session_id,omitempty"`
-	RunKey      string    `json:"run_key,omitempty"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	Harness      string    `json:"harness"`
+	TmuxServer   string    `json:"tmux_server,omitempty"`
+	TmuxSession  string    `json:"tmux_session,omitempty"`
+	Pane         string    `json:"pane,omitempty"`
+	PID          int       `json:"pid,omitempty"`
+	ProcessStart string    `json:"process_start,omitempty"`
+	Generation   string    `json:"generation,omitempty"`
+	SessionID    string    `json:"session_id,omitempty"`
+	RunKey       string    `json:"run_key,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 type agentHarness struct {
@@ -211,7 +213,7 @@ func (s *agentRegistryStore) Load() (agentRegistry, error) {
 }
 
 func (s *agentRegistryStore) load() (agentRegistry, error) {
-	data, err := readBoundedAgentFile(s.path, maxAgentRegistryBytes)
+	data, err := readBoundedAgentFile(s.path, maxAgentReadBytes)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return newAgentRegistry(), nil
@@ -267,7 +269,7 @@ func (s *agentRegistryStore) Apply(input agentEventInput) error {
 }
 
 func (s *agentRegistryStore) backupLegacyRegistry() error {
-	data, err := readBoundedAgentFile(s.path, maxAgentRegistryBytes)
+	data, err := readBoundedAgentFile(s.path, maxAgentReadBytes)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
@@ -670,7 +672,8 @@ func (registry *agentRegistry) apply(input agentEventInput) {
 		run.LifecycleState = transition.State
 		run.LifecycleAt = input.At
 	}
-	if accepted && isTerminalAgentEvent(input.Kind) {
+	terminal := transition.State == agentStateStopped || isTerminalAgentEvent(input.Kind)
+	if accepted && terminal {
 		endedAt := input.At
 		run.EndedAt = &endedAt
 	}
@@ -700,6 +703,10 @@ func (registry *agentRegistry) apply(input agentEventInput) {
 	session.Runs[runKey] = run
 	harness.Sessions[input.SessionID] = session
 	registry.Harnesses[input.Harness] = harness
+	if accepted && terminal {
+		removeAgentActives(registry, identity, input.SessionID)
+		return
+	}
 	if accepted && input.Pane != "" {
 		key := activeAgentKey(identity)
 		if key != "" {
@@ -709,6 +716,7 @@ func (registry *agentRegistry) apply(input agentEventInput) {
 			active.TmuxSession = input.TmuxSession
 			active.Pane = input.Pane
 			active.PID = input.PID
+			active.ProcessStart = input.ProcessStart
 			active.Generation = identity.generationKey()
 			active.SessionID = input.SessionID
 			active.RunKey = runKey
@@ -717,6 +725,33 @@ func (registry *agentRegistry) apply(input agentEventInput) {
 			}
 			registry.Active[key] = active
 		}
+	}
+}
+
+func removeAgentActives(registry *agentRegistry, identity agentIdentity, sessionID string) {
+	for key, active := range registry.Active {
+		if active.Harness != identity.Harness || (sessionID != "" && active.SessionID != sessionID) {
+			continue
+		}
+		if identity.TmuxServer != "" && active.TmuxServer != "" && identity.TmuxServer != active.TmuxServer {
+			continue
+		}
+		if identity.TmuxSession != "" && active.TmuxSession != "" && identity.TmuxSession != active.TmuxSession {
+			continue
+		}
+		if identity.Pane != "" && active.Pane != "" && identity.Pane != active.Pane {
+			continue
+		}
+		if identity.PID != 0 && active.PID != 0 && identity.PID != active.PID {
+			continue
+		}
+		if identity.ProcessStart == "" && active.ProcessStart != "" {
+			continue
+		}
+		if identity.ProcessStart != "" && active.ProcessStart != "" && identity.ProcessStart != active.ProcessStart {
+			continue
+		}
+		delete(registry.Active, key)
 	}
 }
 
