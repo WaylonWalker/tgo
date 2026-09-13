@@ -70,7 +70,7 @@ func TestMergeHarnessHooksPreservesOtherHooks(t *testing.T) {
 		t.Fatalf("existing hook was removed: %s", text)
 	}
 	for _, spec := range definition.HookSpecs {
-		if !strings.Contains(text, hookCommand(scriptPath, spec.Kind)) {
+		if !strings.Contains(text, hookCommand(scriptPath, spec.Event)) {
 			t.Errorf("missing %s hook in %s", spec.Event, text)
 		}
 	}
@@ -206,7 +206,7 @@ func TestSetupManagerWritesEverySupportedIntegrationShape(t *testing.T) {
 	}
 	for _, definition := range setupHarnessDefinitions() {
 		var status setupStatus
-		if definition.OpenCode {
+		if definition.Integration == integrationOpenCode {
 			status, _ = manager.inspectOpenCode()
 		} else {
 			status, _ = manager.inspect(definition)
@@ -260,10 +260,36 @@ func TestSetupDoesNotOverwriteUnmanagedOpenCodePlugin(t *testing.T) {
 	}
 }
 
+func TestSetupRefusesChangedCurrentHook(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
+	manager := &setupManager{home: home}
+	definition := setupDefinition("codex")
+	path := manager.hookScriptPath(definition.ID)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("create hook directory: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(agentHookScript(definition.ID)+"\n# changed\n"), 0o700); err != nil {
+		t.Fatalf("write changed hook: %v", err)
+	}
+	status, detail := manager.inspect(definition)
+	if status != setupStatusConflict || !strings.Contains(detail, "changed") {
+		t.Fatalf("changed current hook status = (%d, %q), want conflict", status, detail)
+	}
+}
+
 func TestOpenCodePluginSourceIsValidJavaScript(t *testing.T) {
 	source := openCodePluginSource()
 	if !strings.Contains(source, "await $`") || strings.Contains(source, "__TGO_TEMPLATE__") {
 		t.Fatalf("generated plugin does not contain the OpenCode shell hook: %s", source)
+	}
+	if !strings.Contains(source, "agent ingest opencode ${nativeKind} --json") ||
+		strings.Contains(source, "agent ingest opencode ${JSON.stringify(nativeKind)}") {
+		t.Fatalf("native event name is not passed as a Bun shell argument: %s", source)
+	}
+	if !strings.Contains(source, "// tgo integration version: 5") {
+		t.Fatalf("generated plugin has the wrong integration version: %s", source)
 	}
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -275,6 +301,41 @@ func TestOpenCodePluginSourceIsValidJavaScript(t *testing.T) {
 	}
 	if output, err := exec.Command(node, "--check", path).CombinedOutput(); err != nil {
 		t.Fatalf("generated plugin is invalid: %v\n%s", err, output)
+	}
+}
+
+func TestLegacyOpenCodeV4SourceUsesTheHistoricalCommand(t *testing.T) {
+	source := legacyOpenCodePluginSourceV4()
+	if !strings.Contains(source, "// tgo integration version: 4") {
+		t.Fatalf("historical plugin has the wrong integration version: %s", source)
+	}
+	if !strings.Contains(source, "agent ingest opencode ${JSON.stringify(nativeKind)} --json") {
+		t.Fatalf("historical plugin does not preserve its original command: %s", source)
+	}
+}
+
+func TestLegacyCopilotV2PowerShellSourcePreservesEphemeralPIDCommand(t *testing.T) {
+	source := legacyAgentHookPowerShellScriptV2("copilot")
+	if !strings.Contains(source, "# tgo integration version: 2") || !strings.Contains(source, "--pid $PID") {
+		t.Fatalf("historical Copilot v2 source changed: %s", source)
+	}
+}
+
+func TestGeneratedHooksRetainLegacyPaneEnvironmentFallback(t *testing.T) {
+	if !strings.Contains(agentHookScript("codex"), "HERDR_PANE_ID") {
+		t.Fatal("shell hook dropped HERDR_PANE_ID fallback")
+	}
+	if !strings.Contains(agentHookPowerShellScript("copilot"), "HERDR_PANE_ID") {
+		t.Fatal("PowerShell hook dropped HERDR_PANE_ID fallback")
+	}
+	if strings.Contains(agentHookPowerShellScript("copilot"), "--pid $PID") {
+		t.Fatal("PowerShell hook uses an ephemeral hook-process PID")
+	}
+	if !strings.Contains(agentHookPowerShellScript("copilot"), "# tgo integration version: 3") {
+		t.Fatal("PowerShell hook did not advance its integration version")
+	}
+	if !strings.Contains(openCodePluginSource(), "process.env.HERDR_PANE_ID") {
+		t.Fatal("OpenCode plugin dropped HERDR_PANE_ID fallback")
 	}
 }
 
@@ -324,7 +385,7 @@ func TestAgentHookScriptForwardsHarnessPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read forwarded args: %v", err)
 	}
-	for _, expected := range []string{"agent event", "--harness codex", "--kind session-start", "--pane %7"} {
+	for _, expected := range []string{"agent ingest codex session-start", "--pane %7"} {
 		if !strings.Contains(string(args), expected) {
 			t.Errorf("forwarded args %q do not contain %q", args, expected)
 		}
@@ -335,6 +396,55 @@ func TestAgentHookScriptForwardsHarnessPayload(t *testing.T) {
 	}
 	if string(input) != `{"session_id":"codex-session"}` {
 		t.Fatalf("hook payload = %q", input)
+	}
+}
+
+func TestCopilotPowerShellHookForwardsHarnessPayload(t *testing.T) {
+	powershell, err := exec.LookPath("pwsh")
+	if err != nil {
+		powershell, err = exec.LookPath("powershell")
+	}
+	if err != nil {
+		t.Skip("PowerShell is not installed")
+	}
+	tempDir := t.TempDir()
+	fakeTgo := filepath.Join(tempDir, "tgo")
+	argsPath := filepath.Join(tempDir, "args")
+	inputPath := filepath.Join(tempDir, "input")
+	fakeSource := "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$TGO_CAPTURE_ARGS\"\ncat > \"$TGO_CAPTURE_INPUT\"\n"
+	if err := os.WriteFile(fakeTgo, []byte(fakeSource), 0o700); err != nil {
+		t.Fatalf("write fake tgo: %v", err)
+	}
+	hookPath := filepath.Join(tempDir, "copilot.ps1")
+	if err := os.WriteFile(hookPath, []byte(agentHookPowerShellScript("copilot")), 0o600); err != nil {
+		t.Fatalf("write PowerShell hook: %v", err)
+	}
+	command := exec.Command(powershell, "-NoProfile", "-File", hookPath, "sessionStart")
+	command.Stdin = strings.NewReader(`{"sessionId":"copilot-session","turnId":"turn-1"}`)
+	command.Env = append(os.Environ(),
+		"TGO_BIN="+fakeTgo,
+		"TGO_CAPTURE_ARGS="+argsPath,
+		"TGO_CAPTURE_INPUT="+inputPath,
+		"TMUX_PANE=%8",
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("run PowerShell hook: %v\n%s", err, output)
+	}
+	input, err := os.ReadFile(inputPath)
+	if err != nil {
+		t.Fatalf("read forwarded PowerShell payload: %v", err)
+	}
+	if string(input) != `{"sessionId":"copilot-session","turnId":"turn-1"}` {
+		t.Fatalf("PowerShell hook payload = %q", input)
+	}
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatalf("read PowerShell hook arguments: %v", err)
+	}
+	for _, expected := range []string{"agent ingest copilot sessionStart", "--pane %8"} {
+		if !strings.Contains(string(args), expected) {
+			t.Errorf("PowerShell hook arguments %q do not contain %q", args, expected)
+		}
 	}
 }
 

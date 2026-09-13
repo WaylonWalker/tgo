@@ -28,6 +28,8 @@ type tmuxCLI struct{}
 
 type paneInfo struct {
 	SessionName string
+	ServerID    string
+	SessionID   string
 	WindowIndex string
 	WindowName  string
 	PaneID      string
@@ -41,13 +43,14 @@ func (p paneInfo) Target() string {
 }
 
 type procStat struct {
-	PID     int
-	PPID    int
-	State   string
-	CPU     float64
-	RSS     int64
-	Comm    string
-	Command string
+	PID       int
+	PPID      int
+	State     string
+	CPU       float64
+	RSS       int64
+	Comm      string
+	Command   string
+	StartTime string
 }
 
 func (t *tmuxCLI) ListSessions() ([]session, error) {
@@ -57,7 +60,7 @@ func (t *tmuxCLI) ListSessions() ([]session, error) {
 		return nil, fmt.Errorf("list sessions: %w", err)
 	}
 
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	lines := strings.Split(strings.TrimRight(string(out), "\r\n"), "\n")
 	if len(lines) == 1 && lines[0] == "" {
 		return []session{}, nil
 	}
@@ -162,7 +165,9 @@ func (t *tmuxCLI) NewSessionAt(name string, rootDir string) error {
 
 func (t *tmuxCLI) ListPanes() ([]paneInfo, error) {
 	format := strings.Join([]string{
+		"#{socket_path}",
 		"#{session_name}",
+		"#{session_id}",
 		"#{window_index}",
 		"#{window_name}",
 		"#{pane_id}",
@@ -175,34 +180,72 @@ func (t *tmuxCLI) ListPanes() ([]paneInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list panes: %w", err)
 	}
+	return parsePaneInfoOutput(string(out)), nil
+}
 
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+func parsePaneInfoOutput(output string) []paneInfo {
+	lines := strings.Split(strings.TrimRight(output, "\r\n"), "\n")
 	if len(lines) == 1 && lines[0] == "" {
-		return []paneInfo{}, nil
+		return []paneInfo{}
 	}
 
 	panes := make([]paneInfo, 0, len(lines))
 	for _, line := range lines {
-		parts := strings.SplitN(line, tmuxFieldSeparator, 7)
-		if len(parts) != 7 {
+		parts := strings.SplitN(line, tmuxFieldSeparator, 9)
+		if len(parts) != 9 {
 			continue
 		}
-		panePID, err := strconv.Atoi(parts[4])
+		panePID, err := strconv.Atoi(parts[6])
 		if err != nil {
 			continue
 		}
 		panes = append(panes, paneInfo{
-			SessionName: parts[0],
-			WindowIndex: parts[1],
-			WindowName:  parts[2],
-			PaneID:      parts[3],
+			ServerID:    parts[0],
+			SessionName: parts[1],
+			SessionID:   parts[2],
+			WindowIndex: parts[3],
+			WindowName:  parts[4],
+			PaneID:      parts[5],
 			PanePID:     panePID,
-			PaneIndex:   parts[5],
-			Active:      parts[6] == "1",
+			PaneIndex:   parts[7],
+			Active:      parts[8] == "1",
 		})
 	}
 
-	return panes, nil
+	return panes
+}
+
+func (t *tmuxCLI) CurrentPane() (string, error) {
+	cmd := exec.Command("tmux", "display-message", "-p", "#{pane_id}")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("current pane: %w", err)
+	}
+	pane := strings.TrimSpace(string(out))
+	if pane == "" {
+		return "", fmt.Errorf("current pane: empty pane ID")
+	}
+	return pane, nil
+}
+
+// CapturePane returns only a bounded tail of the live pane. -J asks tmux to
+// join wrapped lines so screen rules see the same semantic prompt a user sees.
+func (t *tmuxCLI) CapturePane(target string, lines int) (string, error) {
+	if target == "" {
+		return "", fmt.Errorf("capture pane: empty target")
+	}
+	if lines <= 0 {
+		lines = 24
+	}
+	if lines > 80 {
+		lines = 80
+	}
+	cmd := exec.Command("tmux", "capture-pane", "-p", "-J", "-t", target, "-S", fmt.Sprintf("-%d", lines))
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("capture pane %q: %w", target, err)
+	}
+	return normalizeScreen(string(out)), nil
 }
 
 func (t *tmuxCLI) ListProcesses() ([]procStat, error) {
@@ -240,13 +283,14 @@ func (t *tmuxCLI) ListProcesses() ([]procStat, error) {
 			continue
 		}
 		procs = append(procs, procStat{
-			PID:     pid,
-			PPID:    ppid,
-			State:   parts[2],
-			CPU:     cpu,
-			RSS:     rss,
-			Comm:    parts[5],
-			Command: strings.Join(parts[6:], " "),
+			PID:       pid,
+			PPID:      ppid,
+			State:     parts[2],
+			CPU:       cpu,
+			RSS:       rss,
+			Comm:      parts[5],
+			Command:   strings.Join(parts[6:], " "),
+			StartTime: processStartToken(pid),
 		})
 	}
 

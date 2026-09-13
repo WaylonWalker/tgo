@@ -37,13 +37,16 @@ type runResult struct {
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "setup" {
-		if len(os.Args) != 2 {
-			fmt.Fprintln(os.Stderr, "tgo: setup does not accept arguments")
-			os.Exit(2)
-		}
-		if err := runSetup(); err != nil {
+		if err := runSetupArgs(os.Args[2:]); err != nil {
 			fmt.Fprintf(os.Stderr, "tgo: %v\n", err)
-			os.Exit(1)
+			os.Exit(commandExitCode(err))
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "integration" {
+		if err := runIntegrationCommand(os.Args[2:], os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "tgo: %v\n", err)
+			os.Exit(commandExitCode(err))
 		}
 		return
 	}
@@ -73,6 +76,18 @@ func main() {
 		fmt.Fprintf(os.Stderr, "tgo: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+type usageError struct{ err error }
+
+func (e usageError) Error() string { return e.err.Error() }
+func (e usageError) Unwrap() error { return e.err }
+
+func commandExitCode(err error) int {
+	if _, ok := err.(usageError); ok {
+		return 2
+	}
+	return 1
 }
 
 // runTUI creates a single tcell screen and runs a dispatch loop that switches

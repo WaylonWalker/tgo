@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,7 +16,6 @@ import (
 )
 
 const (
-	tgoIntegrationVersion      = 1
 	managedIntegrationVersion  = "tgo integration version: "
 	setupJSONFileMode          = 0o600
 	setupManagedScriptFileMode = 0o700
@@ -28,26 +28,75 @@ type setupHookSpec struct {
 	Kind  string
 }
 
+type integrationKind string
+
+const (
+	integrationJSONPlugin integrationKind = "json-hooks"
+	integrationOpenCode   integrationKind = "opencode-plugin"
+)
+
+type lifecycleMode string
+
+const (
+	lifecycleAuthoritative lifecycleMode = "authoritative"
+	lifecycleCandidate     lifecycleMode = "candidate"
+	lifecycleHybrid        lifecycleMode = "hybrid"
+)
+
+type capabilityLevel string
+
+const (
+	capabilityUnknown capabilityLevel = "unknown"
+	capabilityBasic   capabilityLevel = "basic"
+	capabilityRich    capabilityLevel = "rich"
+)
+
 type setupHarnessDefinition struct {
-	ID        string
-	Label     string
-	Command   string
-	HookSpecs []setupHookSpec
-	OpenCode  bool
+	ID                  string
+	Label               string
+	Command             string
+	Executables         []string
+	Integration         integrationKind
+	IntegrationVersion  int
+	MinTestedVersion    string
+	HookSpecs           []setupHookSpec
+	LifecycleMode       lifecycleMode
+	LifecycleCapability capabilityLevel
+	ScreenCapability    capabilityLevel
+	SessionCapability   capabilityLevel
+	ResumeCapability    capabilityLevel
+	ScreenRules         []screenRule
 }
 
 func setupHarnessDefinitions() []setupHarnessDefinition {
 	return []setupHarnessDefinition{
 		{
-			ID:       "opencode",
-			Label:    "OpenCode",
-			Command:  "opencode",
-			OpenCode: true,
+			ID:                  "opencode",
+			Label:               "OpenCode",
+			Command:             "opencode",
+			Executables:         []string{"opencode"},
+			Integration:         integrationOpenCode,
+			IntegrationVersion:  5,
+			LifecycleMode:       lifecycleAuthoritative,
+			LifecycleCapability: capabilityRich,
+			ScreenCapability:    capabilityBasic,
+			SessionCapability:   capabilityRich,
+			ResumeCapability:    capabilityRich,
+			ScreenRules:         opencodeScreenRules(),
 		},
 		{
-			ID:      "codex",
-			Label:   "Codex",
-			Command: "codex",
+			ID:                  "codex",
+			Label:               "Codex",
+			Command:             "codex",
+			Executables:         []string{"codex"},
+			Integration:         integrationJSONPlugin,
+			IntegrationVersion:  5,
+			LifecycleMode:       lifecycleCandidate,
+			LifecycleCapability: capabilityRich,
+			ScreenCapability:    capabilityBasic,
+			SessionCapability:   capabilityRich,
+			ResumeCapability:    capabilityRich,
+			ScreenRules:         codexScreenRules(),
 			HookSpecs: []setupHookSpec{
 				{Event: "SessionStart", Kind: "session-start"},
 				{Event: "UserPromptSubmit", Kind: "user-prompt"},
@@ -57,9 +106,18 @@ func setupHarnessDefinitions() []setupHarnessDefinition {
 			},
 		},
 		{
-			ID:      "gemini",
-			Label:   "Gemini CLI",
-			Command: "gemini",
+			ID:                  "gemini",
+			Label:               "Gemini CLI",
+			Command:             "gemini",
+			Executables:         []string{"gemini"},
+			Integration:         integrationJSONPlugin,
+			IntegrationVersion:  2,
+			LifecycleMode:       lifecycleHybrid,
+			LifecycleCapability: capabilityRich,
+			ScreenCapability:    capabilityBasic,
+			SessionCapability:   capabilityRich,
+			ResumeCapability:    capabilityBasic,
+			ScreenRules:         geminiScreenRules(),
 			HookSpecs: []setupHookSpec{
 				{Event: "SessionStart", Kind: "session-start"},
 				{Event: "BeforeAgent", Kind: "user-prompt"},
@@ -68,9 +126,18 @@ func setupHarnessDefinitions() []setupHarnessDefinition {
 			},
 		},
 		{
-			ID:      "copilot",
-			Label:   "GitHub Copilot",
-			Command: "copilot",
+			ID:                  "copilot",
+			Label:               "GitHub Copilot",
+			Command:             "copilot",
+			Executables:         []string{"copilot"},
+			Integration:         integrationJSONPlugin,
+			IntegrationVersion:  3,
+			LifecycleMode:       lifecycleHybrid,
+			LifecycleCapability: capabilityRich,
+			ScreenCapability:    capabilityBasic,
+			SessionCapability:   capabilityRich,
+			ResumeCapability:    capabilityBasic,
+			ScreenRules:         copilotScreenRules(),
 			HookSpecs: []setupHookSpec{
 				{Event: "sessionStart", Kind: "session-start"},
 				{Event: "userPromptSubmitted", Kind: "user-prompt"},
@@ -80,9 +147,18 @@ func setupHarnessDefinitions() []setupHarnessDefinition {
 			},
 		},
 		{
-			ID:      "claude",
-			Label:   "Claude Code",
-			Command: "claude",
+			ID:                  "claude",
+			Label:               "Claude Code",
+			Command:             "claude",
+			Executables:         []string{"claude"},
+			Integration:         integrationJSONPlugin,
+			IntegrationVersion:  3,
+			LifecycleMode:       lifecycleHybrid,
+			LifecycleCapability: capabilityRich,
+			ScreenCapability:    capabilityBasic,
+			SessionCapability:   capabilityRich,
+			ResumeCapability:    capabilityRich,
+			ScreenRules:         claudeScreenRules(),
 			HookSpecs: []setupHookSpec{
 				{Event: "SessionStart", Kind: "session-start"},
 				{Event: "UserPromptSubmit", Kind: "user-prompt"},
@@ -92,6 +168,32 @@ func setupHarnessDefinitions() []setupHarnessDefinition {
 			},
 		},
 	}
+}
+
+func harnessDefinitionByID(id string) setupHarnessDefinition {
+	for _, definition := range setupHarnessDefinitions() {
+		if definition.ID == id {
+			return definition
+		}
+	}
+	return setupHarnessDefinition{
+		ID:                  id,
+		Command:             id,
+		Executables:         []string{id},
+		IntegrationVersion:  1,
+		LifecycleCapability: capabilityUnknown,
+		ScreenCapability:    capabilityUnknown,
+		SessionCapability:   capabilityUnknown,
+		ResumeCapability:    capabilityUnknown,
+	}
+}
+
+func harnessIntegrationVersion(id string) int {
+	definition := harnessDefinitionByID(id)
+	if definition.IntegrationVersion <= 0 {
+		return 1
+	}
+	return definition.IntegrationVersion
 }
 
 type setupStatus int
@@ -126,9 +228,10 @@ func newSetupManager() (*setupManager, error) {
 
 func (m *setupManager) discover() []setupHarnessRow {
 	rows := make([]setupHarnessRow, 0)
-	for _, definition := range setupHarnessDefinitions() {
-		binaryPath, err := m.lookPath(definition.Command)
-		if err != nil {
+	for _, driver := range agentDrivers() {
+		definition := harnessDefinitionByID(driver.ID())
+		binaryPath, detected := driver.Detect(m.lookPath)
+		if !detected {
 			continue
 		}
 		status, detail := m.inspect(definition)
@@ -144,7 +247,7 @@ func (m *setupManager) discover() []setupHarnessRow {
 }
 
 func (m *setupManager) inspect(definition setupHarnessDefinition) (setupStatus, string) {
-	if definition.OpenCode {
+	if definition.Integration == integrationOpenCode {
 		return m.inspectOpenCode()
 	}
 
@@ -160,14 +263,17 @@ func (m *setupManager) inspect(definition setupHarnessDefinition) (setupStatus, 
 		if scriptExists {
 			anyScriptExists = true
 		}
-		if scriptVersion > tgoIntegrationVersion {
+		if scriptVersion > definition.IntegrationVersion {
 			return setupStatusConflict, fmt.Sprintf("newer integration version %d", scriptVersion)
 		}
 		expected := agentHookScript(definition.ID)
 		if definition.ID == "copilot" && strings.HasSuffix(path, ".ps1") {
 			expected = agentHookPowerShellScript(definition.ID)
 		}
-		if !scriptExists || scriptVersion != tgoIntegrationVersion || !managedFileMatches(path, expected) {
+		if scriptExists && scriptVersion == definition.IntegrationVersion && !managedFileMatches(path, expected) {
+			return setupStatusConflict, fmt.Sprintf("managed hook %s was changed", path)
+		}
+		if !scriptExists || scriptVersion != definition.IntegrationVersion || !managedFileMatches(path, expected) {
 			scriptsCurrent = false
 		}
 	}
@@ -196,14 +302,15 @@ func (m *setupManager) inspectOpenCode() (setupStatus, string) {
 	if !exists {
 		return setupStatusMissing, "plugin not configured"
 	}
-	if version > tgoIntegrationVersion {
+	definition := harnessDefinitionByID("opencode")
+	if version > definition.IntegrationVersion {
 		return setupStatusConflict, fmt.Sprintf("newer integration version %d", version)
 	}
-	if version == tgoIntegrationVersion {
+	if version == definition.IntegrationVersion {
 		if managedFileMatches(path, openCodePluginSource()) {
 			return setupStatusCurrent, "up to date"
 		}
-		return setupStatusNeedsUpdate, "plugin contents changed"
+		return setupStatusConflict, "plugin contents changed"
 	}
 	return setupStatusNeedsUpdate, "plugin needs an update"
 }
@@ -218,8 +325,7 @@ func (m *setupManager) apply(rows []setupHarnessRow) []setupResult {
 		return setupLockResults(rows, err)
 	}
 	defer func() {
-		_ = lock.Close()
-		_ = os.Remove(lockPath)
+		_ = lock.Release()
 	}()
 	return m.applyUnlocked(rows)
 }
@@ -231,7 +337,7 @@ func (m *setupManager) applyUnlocked(rows []setupHarnessRow) []setupResult {
 			continue
 		}
 		result := setupResult{Harness: row.Definition.Label}
-		if row.Definition.OpenCode {
+		if row.Definition.Integration == integrationOpenCode {
 			result.Changed, result.Err = m.applyOpenCode()
 		} else {
 			result.Changed, result.Err = m.applyJSONHarness(row.Definition)
@@ -248,21 +354,8 @@ func (m *setupManager) applyUnlocked(rows []setupHarnessRow) []setupResult {
 	return results
 }
 
-func acquireSetupLock(path string) (*os.File, error) {
-	deadline := time.Now().Add(setupLockTimeout)
-	for {
-		lock, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err == nil {
-			return lock, nil
-		}
-		if !errors.Is(err, os.ErrExist) {
-			return nil, fmt.Errorf("lock setup: %w", err)
-		}
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("lock setup: timed out")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+func acquireSetupLock(path string) (*fileLock, error) {
+	return acquireFileLock(path, setupLockTimeout, "setup")
 }
 
 func setupLockResults(rows []setupHarnessRow, err error) []setupResult {
@@ -369,6 +462,9 @@ func (m *setupManager) hookScriptPaths(harness string) []string {
 }
 
 func (m *setupManager) openCodePluginPath() string {
+	if value := os.Getenv("OPENCODE_CONFIG_DIR"); value != "" {
+		return filepath.Join(value, "plugins", "tgo-agent-state.js")
+	}
 	return filepath.Join(m.configHome(), "opencode", "plugins", "tgo-agent-state.js")
 }
 
@@ -377,7 +473,7 @@ func (m *setupManager) configPath(harness string) string {
 	case "codex":
 		return filepath.Join(m.optionalHome("CODEX_HOME", ".codex"), "hooks.json")
 	case "gemini":
-		return filepath.Join(m.home, ".gemini", "settings.json")
+		return filepath.Join(m.optionalHome("GEMINI_HOME", ".gemini"), "settings.json")
 	case "copilot":
 		return filepath.Join(m.optionalHome("COPILOT_HOME", ".copilot"), "hooks", "tgo.json")
 	case "claude":
@@ -421,12 +517,12 @@ func configContainsAllCommands(root map[string]any, definition setupHarnessDefin
 		if definition.ID == "copilot" {
 			if !jsonContainsCopilotHookCommand(
 				hooks[spec.Event],
-				hookCommand(scriptPath, spec.Kind),
-				powershellHookCommand(powershellHookPath(scriptPath), spec.Kind),
+				hookCommand(scriptPath, spec.Event),
+				powershellHookCommand(powershellHookPath(scriptPath), spec.Event),
 			) {
 				return false
 			}
-		} else if !jsonContainsHookCommand(hooks[spec.Event], definition.ID, hookCommand(scriptPath, spec.Kind)) {
+		} else if !jsonContainsHookCommand(hooks[spec.Event], definition.ID, hookCommand(scriptPath, spec.Event)) {
 			return false
 		}
 	}
@@ -503,7 +599,7 @@ func mergeHarnessHooks(root map[string]any, definition setupHarnessDefinition, s
 				filtered = append(filtered, entry)
 			}
 		}
-		filtered = append(filtered, setupHookEntry(definition.ID, spec, hookCommand(scriptPath, spec.Kind), scriptPath))
+		filtered = append(filtered, setupHookEntry(definition.ID, spec, hookCommand(scriptPath, spec.Event), scriptPath))
 		hooks[spec.Event] = filtered
 	}
 	return nil
@@ -553,7 +649,8 @@ func isManagedCommandHandler(value map[string]any, definition setupHarnessDefini
 			return false
 		}
 		for _, spec := range definition.HookSpecs {
-			if bashCommand == hookCommand(path, spec.Kind) && powershellCommand == powershellHookCommand(powershellHookPath(path), spec.Kind) {
+			if (bashCommand == hookCommand(path, spec.Kind) || bashCommand == hookCommand(path, spec.Event)) &&
+				(powershellCommand == powershellHookCommand(powershellHookPath(path), spec.Kind) || powershellCommand == powershellHookCommand(powershellHookPath(path), spec.Event)) {
 				return true
 			}
 		}
@@ -565,7 +662,7 @@ func isManagedCommandHandler(value map[string]any, definition setupHarnessDefini
 		return false
 	}
 	for _, spec := range definition.HookSpecs {
-		if command == hookCommand(path, spec.Kind) {
+		if command == hookCommand(path, spec.Kind) || command == hookCommand(path, spec.Event) {
 			return true
 		}
 	}
@@ -573,12 +670,16 @@ func isManagedCommandHandler(value map[string]any, definition setupHarnessDefini
 }
 
 func setupHookEntry(harness string, spec setupHookSpec, command, scriptPath string) map[string]any {
+	eventName := spec.Event
+	if eventName == "" {
+		eventName = spec.Kind
+	}
 	switch harness {
 	case "copilot":
 		return map[string]any{
 			"type":       "command",
 			"bash":       command,
-			"powershell": powershellHookCommand(powershellHookPath(scriptPath), spec.Kind),
+			"powershell": powershellHookCommand(powershellHookPath(scriptPath), eventName),
 			"timeoutSec": 3,
 		}
 	case "gemini":
@@ -721,7 +822,11 @@ func writeManagedFile(path string, data []byte, mode os.FileMode) error {
 }
 
 func writeAtomicFile(path string, data []byte, mode os.FileMode) error {
-	dir := filepath.Dir(path)
+	target, err := atomicWriteTarget(path)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(target)
 	temp, err := os.CreateTemp(dir, ".tgo-setup-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create temporary file for %s: %w", path, err)
@@ -743,10 +848,32 @@ func writeAtomicFile(path string, data []byte, mode os.FileMode) error {
 	if err := temp.Close(); err != nil {
 		return fmt.Errorf("close %s: %w", path, err)
 	}
-	if err := os.Rename(tempPath, path); err != nil {
+	if err := os.Rename(tempPath, target); err != nil {
 		return fmt.Errorf("replace %s: %w", path, err)
 	}
 	return nil
+}
+
+func atomicWriteTarget(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return path, nil
+		}
+		return "", fmt.Errorf("inspect %s: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return path, nil
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", path, err)
+	}
+	target, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", fmt.Errorf("resolve symlink %s: %w", path, err)
+	}
+	return target, nil
 }
 
 func backupManagedFile(path string) error {
@@ -776,8 +903,8 @@ func agentHookScript(harness string) string {
 
 set -eu
 
-kind="${1:-}"
-[ -n "$kind" ] || exit 0
+event="${1:-}"
+[ -n "$event" ] || exit 0
 
 pane="${TMUX_PANE:-${HERDR_PANE_ID:-}}"
 if [ -z "$pane" ] && command -v tmux >/dev/null 2>&1; then
@@ -789,12 +916,11 @@ if ! command -v "$tgo_bin" >/dev/null 2>&1 && [ ! -x "$tgo_bin" ]; then
     exit 0
 fi
 
-"$tgo_bin" agent event \
-    --harness %s \
-    --kind "$kind" \
-    --pane "$pane" \
-    --pid "${PPID:-0}" >/dev/null 2>&1 || true
-`, managedIntegrationVersion, tgoIntegrationVersion, harness)
+	"$tgo_bin" agent ingest %s "$event" \
+	--pane "$pane" \
+	--session "${GEMINI_SESSION_ID:-${COPILOT_SESSION_ID:-${CLAUDE_SESSION_ID:-}}}" \
+	--pid "${PPID:-0}" >/dev/null 2>&1 || true
+`, managedIntegrationVersion, harnessIntegrationVersion(harness), harness)
 }
 
 func agentHookPowerShellScript(harness string) string {
@@ -823,20 +949,67 @@ if ([string]::IsNullOrWhiteSpace($Tgo)) {
 }
 
 try {
-    & $Tgo agent event __PS_CONT__
-        --harness %s __PS_CONT__
-        --kind $Kind __PS_CONT__
+    & $Tgo agent ingest %s $Kind __PS_CONT__
+        --pane $Pane __PS_CONT__
+        2>$null | Out-Null
+} catch {
+    # Reporting must never interrupt the harness session.
+}
+exit 0
+	`, managedIntegrationVersion, harnessIntegrationVersion(harness), harness)
+	return strings.ReplaceAll(source, "__PS_CONT__", "`")
+}
+
+func legacyAgentHookPowerShellScriptV2(harness string) string {
+	source := fmt.Sprintf(`# %s%d
+
+param(
+    [Parameter(Position = 0)]
+    [string]$Kind
+)
+
+if ([string]::IsNullOrWhiteSpace($Kind)) {
+    exit 0
+}
+
+$Pane = $env:TMUX_PANE
+if ([string]::IsNullOrWhiteSpace($Pane)) {
+    $Pane = $env:HERDR_PANE_ID
+}
+if ([string]::IsNullOrWhiteSpace($Pane) -and (Get-Command tmux -ErrorAction SilentlyContinue)) {
+    $Pane = (& tmux display-message -p '#{pane_id}' 2>$null).Trim()
+}
+
+$Tgo = $env:TGO_BIN
+if ([string]::IsNullOrWhiteSpace($Tgo)) {
+    $Tgo = "tgo"
+}
+
+try {
+    & $Tgo agent ingest %s $Kind __PS_CONT__
         --pane $Pane __PS_CONT__
         --pid $PID 2>$null | Out-Null
 } catch {
     # Reporting must never interrupt the harness session.
 }
 exit 0
-	`, managedIntegrationVersion, tgoIntegrationVersion, harness)
+`, managedIntegrationVersion, 2, harness)
 	return strings.ReplaceAll(source, "__PS_CONT__", "`")
 }
 
 func openCodePluginSource() string {
+	return openCodePluginSourceVersion(harnessIntegrationVersion("opencode"), false)
+}
+
+func legacyOpenCodePluginSourceV4() string {
+	return openCodePluginSourceVersion(4, true)
+}
+
+func openCodePluginSourceVersion(version int, quoteNativeKind bool) string {
+	nativeKindExpression := "${nativeKind}"
+	if quoteNativeKind {
+		nativeKindExpression = "${JSON.stringify(nativeKind)}"
+	}
 	source := fmt.Sprintf(`// %s%d
 const TGO = process.env.TGO_BIN || "tgo";
 const PANE = process.env.TMUX_PANE || process.env.HERDR_PANE_ID || "";
@@ -852,11 +1025,13 @@ function sessionID(properties) {
   return undefined;
 }
 
-async function report(event, kind, id, summary) {
+async function report(event, id, summary, kind) {
   if (!id || children.has(id)) return;
+  const nativeKind = kind || event?.type || "unknown";
   const payload = {
     harness: "opencode",
-    kind,
+    nativeKind,
+    nativeEventType: event?.type || "unknown",
     sessionId: id,
     runId: id,
     pane: PANE,
@@ -865,7 +1040,7 @@ async function report(event, kind, id, summary) {
   };
   if (summary) payload.summary = summary;
   try {
-    await $__TGO_TEMPLATE__${TGO} agent event --json ${JSON.stringify(payload)}__TGO_TEMPLATE__;
+    await $__TGO_TEMPLATE__${TGO} agent ingest opencode %s --json ${JSON.stringify(payload)}__TGO_TEMPLATE__;
   } catch {
     // Reporting must never interrupt an OpenCode session.
   }
@@ -873,14 +1048,14 @@ async function report(event, kind, id, summary) {
 
 function statusKind(status) {
   const value = typeof status === "string" ? status : status?.type;
-  if (value === "idle") return "agent-stop";
-  if (value === "retry") return "question";
-  return "session-start";
+  if (value === "idle") return "session.status.idle";
+  if (value === "retry") return "session.status.retry";
+  return "session.status.busy";
 }
 
 export const TgoAgentStatePlugin = async ({ $ }) => ({
   "chat.message": async ({ sessionID }) => {
-    await report({ type: "chat.message", properties: { sessionID } }, "user-prompt", sessionID);
+    await report({ type: "chat.message", properties: { sessionID } }, sessionID);
   },
   event: async ({ event }) => {
     const properties = event?.properties || {};
@@ -892,34 +1067,34 @@ export const TgoAgentStatePlugin = async ({ $ }) => ({
 
     switch (event?.type) {
       case "session.created":
-        await report(event, "session-start", id, properties.info?.title || "");
+        await report(event, id, properties.info?.title || "");
         break;
       case "session.status":
-        await report(event, statusKind(properties.status), id, properties.status?.message || "");
+        await report(event, id, properties.status?.message || "", statusKind(properties.status));
         break;
       case "session.idle":
-        await report(event, "agent-stop", id);
+        await report(event, id);
         break;
       case "session.error":
-        await report(event, "failed", id, properties.error?.message || "");
+        await report(event, id, properties.error?.message || "");
         break;
       case "session.deleted":
-        await report(event, "session-end", id);
+        await report(event, id);
         break;
       case "permission.asked":
       case "question.asked":
-        await report(event, "question", id);
+        await report(event, id);
         break;
       case "permission.replied":
       case "question.replied":
       case "question.rejected":
       case "session.compacted":
-        await report(event, "session-start", id);
+        await report(event, id);
         break;
     }
   },
 });
-	`, managedIntegrationVersion, tgoIntegrationVersion)
+	`, managedIntegrationVersion, version, nativeKindExpression)
 	return strings.ReplaceAll(source, "__TGO_TEMPLATE__", "`")
 }
 
@@ -1061,7 +1236,19 @@ func drawSetupText(screen tcell.Screen, x, y int, style tcell.Style, text string
 	}
 }
 
-func runSetup() error {
+func runSetupArgs(args []string) error {
+	flags := flag.NewFlagSet("tgo setup", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	var all, yes, dryRun bool
+	flags.BoolVar(&all, "all", false, "select all detected harnesses")
+	flags.BoolVar(&yes, "yes", false, "skip interactive confirmation")
+	flags.BoolVar(&dryRun, "dry-run", false, "show changes without writing")
+	if err := flags.Parse(args); err != nil {
+		return usageError{err}
+	}
+	if flags.NArg() != 0 {
+		return usageError{fmt.Errorf("unexpected argument %q", flags.Arg(0))}
+	}
 	manager, err := newSetupManager()
 	if err != nil {
 		return err
@@ -1070,6 +1257,19 @@ func runSetup() error {
 	if len(rows) == 0 {
 		fmt.Println("tgo: no supported harnesses are installed")
 		return nil
+	}
+	if dryRun {
+		for _, row := range rows {
+			fmt.Printf("%s: %s (%s)\n", row.Definition.Label, setupStatusLabel(row.Status), row.Detail)
+		}
+		return nil
+	}
+	if all || yes {
+		if all && !yes {
+			return usageError{errors.New("setup --all requires --yes for non-interactive use")}
+		}
+		results := manager.apply(rows)
+		return printSetupResults(results)
 	}
 
 	screen, err := tcell.NewScreen()
@@ -1093,6 +1293,10 @@ func runSetup() error {
 		fmt.Println("tgo: no harnesses selected")
 		return nil
 	}
+	return printSetupResults(results)
+}
+
+func printSetupResults(results []setupResult) error {
 	var failures []string
 	for _, result := range results {
 		if result.Err != nil {

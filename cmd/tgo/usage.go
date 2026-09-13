@@ -32,19 +32,23 @@ type usageTotals struct {
 }
 
 type windowUsage struct {
-	Target        string
-	SessionName   string
-	WindowIndex   string
-	WindowName    string
-	PaneIndex     string
-	Active        bool
-	CPU           float64
-	RSS           int64
-	TopCPUProcess string
-	TopMemProcess string
-	AgentStatus   string
-	AgentCommand  string
-	AgentHarness  string
+	Target          string
+	SessionName     string
+	WindowIndex     string
+	WindowName      string
+	PaneIndex       string
+	Active          bool
+	CPU             float64
+	RSS             int64
+	TopCPUProcess   string
+	TopMemProcess   string
+	AgentStatus     string
+	AgentAuthority  string
+	AgentConfidence string
+	AgentReason     string
+	AgentIdentity   agentIdentity
+	AgentCommand    string
+	AgentHarness    string
 	// CopilotStatus and CopilotCommand are retained for compatibility with the
 	// original Copilot picker data shape. New code uses the agent-prefixed fields.
 	CopilotStatus  string
@@ -126,7 +130,13 @@ func loadPaneUsage(client *tmuxCLI, mode usageMode) ([]windowUsage, usageTotals,
 		if err != nil {
 			return nil, usageTotals{}, err
 		}
-		return buildAgentsUsage(panes, procs, registry), totals, nil
+		screens := make(map[string]string)
+		for _, pane := range panes {
+			if captured, captureErr := client.CapturePane(pane.Target(), 24); captureErr == nil {
+				screens[pane.Target()] = captured
+			}
+		}
+		return buildAgentsUsageWithScreens(panes, procs, registry, screens), totals, nil
 	}
 	rows := buildPaneUsage(panes, procs)
 	sortPaneUsage(rows, mode)
@@ -138,17 +148,21 @@ func buildCopilotUsage(panes []paneInfo, procs []procStat) []windowUsage {
 }
 
 func buildAgentsUsage(panes []paneInfo, procs []procStat, registry agentRegistry) []windowUsage {
+	return buildAgentsUsageWithScreens(panes, procs, registry, nil)
+}
+
+func buildAgentsUsageWithScreens(panes []paneInfo, procs []procStat, registry agentRegistry, screens map[string]string) []windowUsage {
 	rows := make([]windowUsage, 0)
 	known := make(map[string]bool)
 	for _, definition := range setupHarnessDefinitions() {
 		known[definition.ID] = true
-		rows = append(rows, buildHarnessUsage(definition.ID, panes, procs, registry)...)
+		rows = append(rows, buildHarnessUsageWithScreens(definition.ID, panes, procs, registry, screens)...)
 	}
 	// Preserve generic event integrations even when a harness was added by a
 	// newer setup version than this picker knows about.
 	for harness := range registry.Harnesses {
 		if !known[harness] {
-			rows = append(rows, buildHarnessUsage(harness, panes, procs, registry)...)
+			rows = append(rows, buildHarnessUsageWithScreens(harness, panes, procs, registry, screens)...)
 		}
 	}
 	sortPaneUsage(rows, usageModeAgents)
@@ -156,17 +170,36 @@ func buildAgentsUsage(panes []paneInfo, procs []procStat, registry agentRegistry
 }
 
 func buildHarnessUsage(harness string, panes []paneInfo, procs []procStat, registry agentRegistry) []windowUsage {
+	return buildHarnessUsageWithScreens(harness, panes, procs, registry, nil)
+}
+
+func buildHarnessUsageWithScreens(harness string, panes []paneInfo, procs []procStat, registry agentRegistry, screens map[string]string) []windowUsage {
 	var matched []harnessPane
-	switch harness {
-	case "copilot":
-		matched = findCopilotPanes(panes, procs)
-	case "opencode":
-		matched = findOpenCodePanes(panes, procs)
-	default:
-		matched = findHarnessPanes(harness, panes, procs)
-	}
+	matched = findHarnessPanes(harness, panes, procs)
 	rows := make([]windowUsage, 0, len(matched))
-	byTarget := make(map[string]int, len(matched))
+	references := agentRunsForHarness(registry, harness)
+	matchedTargets := make(map[string]bool, len(matched))
+	for _, pane := range matched {
+		matchedTargets[pane.Target()] = true
+	}
+	// Keep a recently tracked pane visible after the harness process exits so
+	// the user can see a deliberate stopped state instead of a disappearing row.
+	for _, pane := range panes {
+		if matchedTargets[pane.Target()] {
+			continue
+		}
+		for _, reference := range references {
+			if reference.Run.Pane != pane.Target() && reference.Run.Identity.Pane != pane.Target() {
+				continue
+			}
+			if !reference.Run.UpdatedAt.IsZero() && time.Since(reference.Run.UpdatedAt) > 30*time.Minute {
+				continue
+			}
+			matched = append(matched, harnessPane{paneInfo: pane, Command: agentRunSummary(reference)})
+			matchedTargets[pane.Target()] = true
+			break
+		}
+	}
 	for _, pane := range matched {
 		rows = append(rows, windowUsage{
 			Target:         pane.Target(),
@@ -175,25 +208,38 @@ func buildHarnessUsage(harness string, panes []paneInfo, procs []procStat, regis
 			WindowName:     pane.WindowName,
 			PaneIndex:      pane.PaneIndex,
 			Active:         pane.Active,
-			AgentStatus:    pane.Status,
+			AgentStatus:    string(agentStateUnknown),
+			AgentAuthority: string(authorityUnknown),
 			AgentCommand:   pane.Command,
 			AgentHarness:   harness,
 			CopilotStatus:  pane.Status,
 			CopilotCommand: pane.Command,
 		})
-		byTarget[pane.Target()] = len(rows) - 1
 	}
 
-	seenTargets := make(map[string]bool)
-	for _, reference := range agentRunsForHarness(registry, harness) {
-		run := reference.Run
-		if run.Pane == "" || seenTargets[run.Pane] {
-			continue
+	definition := harnessDefinitionByID(harness)
+	for index, pane := range matched {
+		live := agentIdentity{
+			Harness:      harness,
+			TmuxServer:   pane.ServerID,
+			TmuxSession:  pane.SessionID,
+			Pane:         pane.PaneID,
+			PID:          pane.PID,
+			ProcessStart: pane.ProcessStart,
 		}
-		seenTargets[run.Pane] = true
-		if index, ok := byTarget[run.Pane]; ok {
-			rows[index].AgentStatus = agentRunStatus(run.Status, rows[index].AgentStatus)
-			rows[index].AgentCommand = agentRunSummary(reference)
+		captured := ""
+		if screens != nil {
+			captured = screens[pane.Target()]
+		}
+		evidence := resolveAgentEvidence(definition, live, references, captured, time.Now().UTC())
+		rows[index].AgentStatus = string(evidence.State)
+		rows[index].AgentAuthority = string(evidence.Authority)
+		rows[index].AgentConfidence = evidence.Confidence
+		rows[index].AgentReason = evidence.Reason
+		rows[index].AgentIdentity = live
+		if evidence.Run != nil {
+			ref := agentRunReference{SessionID: evidence.Run.Identity.SessionID, Run: *evidence.Run}
+			rows[index].AgentCommand = agentRunSummary(ref)
 		}
 	}
 	sortPaneUsage(rows, usageModeAgents)
@@ -201,18 +247,8 @@ func buildHarnessUsage(harness string, panes []paneInfo, procs []procStat, regis
 }
 
 func agentRunStatus(kind string, fallback string) string {
-	switch kind {
-	case "session-start", "user-prompt":
-		return "working"
-	case "agent-stop":
-		return "idle"
-	case "question":
-		return "waiting"
-	case "session-end", "completed", "failed", "cancelled", "stopped":
-		return "stopped"
-	default:
-		return fallback
-	}
+	_ = fallback // Process scheduler states are not lifecycle fallbacks.
+	return string(legacyAgentState(kind))
 }
 
 func agentRunSummary(reference agentRunReference) string {

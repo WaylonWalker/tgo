@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,7 +51,7 @@ func TestAgentRegistryPersistsAndUpdatesRunBySessionAndPane(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read persisted registry: %v", err)
 	}
-	if !strings.Contains(string(data), `"version": 1`) {
+	if !strings.Contains(string(data), `"version": 2`) {
 		t.Fatalf("missing registry version: %s", data)
 	}
 }
@@ -102,6 +103,110 @@ func TestParseAgentEventArgsRejectsUnknownFlagAndConflicts(t *testing.T) {
 		strings.NewReader(""),
 	); err == nil {
 		t.Fatal("conflicting flag and JSON were accepted")
+	}
+}
+
+func TestParseAgentIngestCapturesNativeIdentityFields(t *testing.T) {
+	input, err := parseAgentIngestArgs(
+		[]string{"codex", "PermissionRequest", "--pane", "%4", "--pid", "123", "--turn", "turn-7"},
+		strings.NewReader(`{"session_id":"session-1","cwd":"/work","permission_id":"perm-1","timestamp":"2026-09-13T12:00:00Z"}`),
+	)
+	if err != nil {
+		t.Fatalf("parse ingest: %v", err)
+	}
+	if input.Harness != "codex" || input.NativeKind != "PermissionRequest" || input.SessionID != "session-1" || input.TurnID != "turn-7" {
+		t.Fatalf("native identity fields missing: %+v", input)
+	}
+	if input.CWD != "/work" || input.PermissionID != "perm-1" || input.At.IsZero() {
+		t.Fatalf("native context fields missing: %+v", input)
+	}
+}
+
+func TestOversizedRawPayloadIsStoredAsValidTruncationMarker(t *testing.T) {
+	store := &agentRegistryStore{path: filepath.Join(t.TempDir(), "agents.json")}
+	raw := json.RawMessage(`{"payload":"` + strings.Repeat("x", maxRawEventBytes) + `"}`)
+	if err := store.Apply(agentEventInput{
+		Harness:    "codex",
+		Kind:       "SessionStart",
+		NativeKind: "SessionStart",
+		SessionID:  "large-payload",
+		Data:       raw,
+	}); err != nil {
+		t.Fatalf("apply oversized payload: %v", err)
+	}
+	registry, err := store.Load()
+	if err != nil {
+		t.Fatalf("load oversized payload: %v", err)
+	}
+	events := registry.Harnesses["codex"].Sessions["large-payload"].Runs["large-payload"].Events
+	if len(events) != 1 || !json.Valid(events[0].Data) {
+		t.Fatalf("stored payload is not valid JSON: %+v", events)
+	}
+	var marker struct {
+		Truncated     bool `json:"truncated"`
+		OriginalBytes int  `json:"original_bytes"`
+	}
+	if err := json.Unmarshal(events[0].Data, &marker); err != nil {
+		t.Fatalf("decode truncation marker: %v", err)
+	}
+	if !marker.Truncated || marker.OriginalBytes != len(raw) {
+		t.Fatalf("truncation marker = %+v, want original size %d", marker, len(raw))
+	}
+}
+
+func TestAgentRegistryPrunesOldHistoryBeforeRejectingOversize(t *testing.T) {
+	store := &agentRegistryStore{path: filepath.Join(t.TempDir(), "agents.json")}
+	registry := newAgentRegistry()
+	registry.Harnesses["codex"] = agentHarness{Sessions: make(map[string]agentSession)}
+	base := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	payload := json.RawMessage(`{"payload":"` + strings.Repeat("x", 14_000) + `"}`)
+	for index := 0; index < 600; index++ {
+		id := fmt.Sprintf("session-%03d", index)
+		at := base.Add(time.Duration(index) * time.Second)
+		registry.Harnesses["codex"].Sessions[id] = agentSession{
+			ID: id,
+			Runs: map[string]agentRun{
+				id: {
+					ID:        id,
+					Status:    "idle",
+					StartedAt: at,
+					UpdatedAt: at,
+					Events:    []agentEvent{{At: at, Data: payload}},
+				},
+			},
+		}
+	}
+	data, err := marshalAgentRegistry(registry)
+	if err != nil {
+		t.Fatalf("marshal oversized registry: %v", err)
+	}
+	if len(data) <= maxAgentRegistryBytes {
+		t.Fatalf("test registry size = %d, want more than %d", len(data), maxAgentRegistryBytes)
+	}
+	if err := os.WriteFile(store.path, data, 0o600); err != nil {
+		t.Fatalf("write oversized registry: %v", err)
+	}
+	if err := store.Apply(agentEventInput{
+		Harness:    "codex",
+		Kind:       "SessionStart",
+		NativeKind: "SessionStart",
+		SessionID:  "current",
+	}); err != nil {
+		t.Fatalf("recover oversized registry: %v", err)
+	}
+	info, err := os.Stat(store.path)
+	if err != nil {
+		t.Fatalf("stat pruned registry: %v", err)
+	}
+	if info.Size() > maxAgentRegistryBytes {
+		t.Fatalf("registry size = %d, exceeds %d", info.Size(), maxAgentRegistryBytes)
+	}
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatalf("load pruned registry: %v", err)
+	}
+	if len(loaded.Harnesses["codex"].Sessions) >= 600 {
+		t.Fatal("old registry history was not pruned")
 	}
 }
 
