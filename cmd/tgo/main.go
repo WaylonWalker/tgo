@@ -99,7 +99,7 @@ func runTUI(client *tmuxCLI, startView viewID) error {
 		switch current {
 		case viewDefault:
 			if sessionApp == nil {
-				store, err := openStateStore()
+				store, err := openStateStoreForBackend(client.BackendName())
 				if err != nil {
 					return fmt.Errorf("state init failed: %w", err)
 				}
