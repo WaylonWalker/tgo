@@ -18,10 +18,6 @@ type stateStore struct {
 	path string
 }
 
-func openStateStore() (*stateStore, error) {
-	return openStateStoreForBackend("tmux")
-}
-
 func openStateStoreForBackend(backend string) (*stateStore, error) {
 	configDir, err := os.UserConfigDir()
 	if err != nil {
