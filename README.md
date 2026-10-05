@@ -1,25 +1,27 @@
 # tgo
 
-`tgo` is a fast tmux session switcher built for popup workflows.
+`tgo` is a fast tmux and Herdr workspace switcher built for popup workflows.
 
 The core flow is two keystrokes:
 
-1. open `tgo` in a tmux popup from a tmux key binding
-2. press the session letter and switch instantly
+1. open `tgo` in a tmux or Herdr popup from a key binding
+2. press the workspace/session letter and switch instantly
 
-`tgo` lists tmux sessions, pins favorites at the top, and keeps hotkeys stable by priority.
+`tgo` auto-detects the active multiplexer. In tmux it lists tmux sessions and panes. In Herdr it lists workspaces and panes through Herdr's local socket API. Favorites stay pinned at the top and hotkeys stay stable by priority.
 
-`tgo cpu` and `tgo mem` open a tmux pane picker sorted by live process usage, so you can jump straight to the busiest pane.
+`tgo cpu` and `tgo mem` open a pane picker sorted by live process usage, so you can jump straight to the busiest pane in either backend.
 
 ## Features
 
-- responsive terminal UI that works in standard terminals and tmux popups
+- responsive terminal UI that works in standard terminals, tmux popups, and Herdr popups
+- automatic tmux/Herdr backend detection
 - direct switch hotkeys using `asdfqwertzxcvb` for the All list
 - favorite hotkeys on `ctrl+asdfqwertzxcvb`
 - favorite pinning with favorites always rendered first
 - reorder modes (`push` / `swap`) with previews and key-change indicators
-- tmux session management from the UI: create (`n`) and kill (`Shift+K`)
-- tmux pane pickers sorted by live CPU or memory usage (`tgo cpu`, `tgo mem`)
+- workspace/session management from the UI: create (`n`) and kill (`Shift+K`)
+- pane pickers sorted by live CPU or memory usage (`tgo cpu`, `tgo mem`)
+- direct Herdr pane focus over `HERDR_SOCKET_PATH`, including ordinary non-agent panes
 
 ## Install
 
@@ -56,17 +58,17 @@ Manual install from the Releases page:
 
 ## Keymap
 
-- `asdfqwertzxcvb`: switch directly to listed session in `All`
-- `ctrl+asdfqwertzxcvb`: switch directly to listed session in `Favorites`
+- `asdfqwertzxcvb`: switch directly to listed workspace/session in `All`
+- `ctrl+asdfqwertzxcvb`: switch directly to listed workspace/session in `Favorites`
 - `j/k` or arrow keys: move cursor
 - `tab`: switch active section (`Favorites` / `All`)
-- `space`: toggle reorder mode for selected session
+- `space`: toggle reorder mode for selected workspace/session
 - `m`: cycle reorder mode (`push` / `swap`)
-- `enter`: switch to selected session
-- `.`: toggle favorite on selected session
-- `n`: create new tmux session (type name, `enter`)
-- `Shift+K`: kill selected tmux session
-- `l`: refresh tmux session list
+- `enter`: switch to selected workspace/session
+- `.`: toggle favorite on selected workspace/session
+- `n`: create a new workspace/session (type name, `enter`)
+- `Shift+K`: kill selected workspace/session
+- `l`: refresh the workspace/session list
 - `esc` or `ctrl+c`: quit
 
 ## tmux popup binding
@@ -77,6 +79,33 @@ bind-key g display-popup -E -w 70% -h 70% "tgo"
 
 Pick any key you want instead of `g`.
 
+## Herdr popup binding
+
+Add a custom popup command to `~/.config/herdr/config.toml`:
+
+```toml
+[[keys.command]]
+key = "prefix+alt+g"
+type = "popup"
+command = "tgo"
+description = "open tgo"
+width = "80%"
+height = "80%"
+```
+
+Herdr popups do not get a `HERDR_PANE_ID`; Herdr supplies `HERDR_ACTIVE_PANE_ID` for the tiled pane underneath the popup. `tgo` recognizes that popup context and uses `HERDR_SOCKET_PATH` to talk to the running Herdr server.
+
+`tgo` also recognizes a normal Herdr pane through `HERDR_PANE_ID`. If Herdr environment variables were inherited into a nested tmux session, tmux wins so the inner multiplexer remains in control. A Herdr popup takes precedence because `HERDR_ACTIVE_PANE_ID` explicitly identifies the popup context.
+
+For troubleshooting or scripting, backend selection can be forced:
+
+```bash
+TGO_BACKEND=tmux tgo
+TGO_BACKEND=herdr tgo
+```
+
+`TGO_BACKEND=herdr` requires `HERDR_SOCKET_PATH`.
+
 ## Usage Pickers
 
 ```bash
@@ -84,7 +113,7 @@ tgo cpu
 tgo mem
 ```
 
-Both commands inspect tmux pane PIDs, sum descendant process usage per tmux pane, sort the picker by the requested metric, and switch to the chosen pane target.
+Both commands inspect pane shell PIDs, sum descendant process usage per pane, sort the picker by the requested metric, and switch to the chosen pane target. tmux uses tmux pane metadata; Herdr uses `pane.list`, `pane.process_info`, and direct socket focus.
 
 ## Agent Pane Reports
 
@@ -132,11 +161,12 @@ The original JSON payload is retained with the event.
 
 ## State storage
 
-`tgo` stores favorites, favorite root dirs, and ordering in:
+`tgo` keeps multiplexer navigation state separate so favorites from one backend are never recreated in the other:
 
-- `$XDG_CONFIG_HOME/tgo/state.json` (falls back to `~/.config/tgo/state.json`)
+- tmux: `$XDG_CONFIG_HOME/tgo/state.json` (falls back to `~/.config/tgo/state.json`)
+- Herdr: `$XDG_CONFIG_HOME/tgo/state-herdr.json` (falls back to `~/.config/tgo/state-herdr.json`)
 
-Favorites persist even if a session is not currently running; missing favorites are recreated using the saved root directory.
+Favorites persist even if a workspace/session is not currently running; missing favorites are recreated using the saved root directory.
 
 Agent lifecycle data is stored atomically in:
 
@@ -150,10 +180,11 @@ configuration, it keeps the first copy at `<file>.tgo.bak`.
 
 1. Install [just](https://github.com/casey/just)
 2. Run `just build` to produce `bin/tgo`
-3. Run `just run` inside tmux to use the app
+3. Run `just run` inside tmux or Herdr to use the app
 4. Run `just ci` before pushing changes
 
 ## Notes
 
-- `tgo` expects a running tmux server and a tmux client context.
-- switching is implemented with `tmux switch-client -t <session>`.
+- tmux remains the fallback backend when no valid Herdr context is detected.
+- Herdr detection validates the active tiled pane over the local socket before selecting the Herdr backend.
+- Herdr workspaces map to tgo's session list; Herdr panes map to the CPU, memory, and agent pickers.
