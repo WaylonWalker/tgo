@@ -303,7 +303,9 @@ func (h *herdrCLI) callSocket(method string, params any, out any) error {
 	if err != nil {
 		return fmt.Errorf("connect herdr socket: %w", err)
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
 
 	request := struct {
