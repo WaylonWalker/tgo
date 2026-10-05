@@ -19,11 +19,19 @@ type stateStore struct {
 }
 
 func openStateStore() (*stateStore, error) {
+	return openStateStoreForBackend("tmux")
+}
+
+func openStateStoreForBackend(backend string) (*stateStore, error) {
 	configDir, err := os.UserConfigDir()
 	if err != nil {
 		return nil, fmt.Errorf("config dir: %w", err)
 	}
-	return &stateStore{path: filepath.Join(configDir, "tgo", "state.json")}, nil
+	filename := "state.json"
+	if backend != "" && backend != "tmux" {
+		filename = "state-" + backend + ".json"
+	}
+	return &stateStore{path: filepath.Join(configDir, "tgo", filename)}, nil
 }
 
 func (s *stateStore) Load() (state, error) {
