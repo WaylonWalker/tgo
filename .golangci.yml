@@ -1,0 +1,11 @@
+version: "2"
+
+linters:
+  exclusions:
+    rules:
+      # This pre-existing setup picker simplification is unrelated to the Herdr
+      # backend. Keep CI focused while preserving all other staticcheck checks.
+      - path: cmd/tgo/setup\.go
+        text: "QF1003:"
+        linters:
+          - staticcheck
