@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -155,5 +156,24 @@ func TestDetectionCanForceTmux(t *testing.T) {
 
 	if backend := detectMultiplexerBackend(); backend != nil {
 		t.Fatalf("TGO_BACKEND=tmux should disable Herdr detection, got %T", backend)
+	}
+}
+
+func TestStateFilesAreSeparatedByBackend(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	tmuxStore, err := openStateStoreForBackend("tmux")
+	if err != nil {
+		t.Fatalf("tmux state store: %v", err)
+	}
+	herdrStore, err := openStateStoreForBackend("herdr")
+	if err != nil {
+		t.Fatalf("herdr state store: %v", err)
+	}
+	if got, want := filepath.Base(tmuxStore.path), "state.json"; got != want {
+		t.Fatalf("tmux state filename: got %q want %q", got, want)
+	}
+	if got, want := filepath.Base(herdrStore.path), "state-herdr.json"; got != want {
+		t.Fatalf("herdr state filename: got %q want %q", got, want)
 	}
 }
