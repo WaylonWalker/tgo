@@ -33,11 +33,15 @@ type herdrAPIError struct {
 }
 
 type herdrWorkspace struct {
-	WorkspaceID string `json:"workspace_id"`
-	Label       string `json:"label"`
-	CWD         string `json:"cwd"`
-	Focused     bool   `json:"focused"`
-	Number      int    `json:"number"`
+	WorkspaceID string                  `json:"workspace_id"`
+	Label       string                  `json:"label"`
+	Focused     bool                    `json:"focused"`
+	Number      int                     `json:"number"`
+	Worktree    *herdrWorkspaceWorktree `json:"worktree"`
+}
+
+type herdrWorkspaceWorktree struct {
+	CheckoutPath string `json:"checkout_path"`
 }
 
 type herdrTab struct {
@@ -137,18 +141,51 @@ func (h *herdrCLI) ListSessions() ([]session, error) {
 		counts[workspaceDisplayName(workspace)]++
 	}
 
-	h.workspaceTargets = make(map[string]string, len(workspaces))
+	// WorkspaceInfo intentionally does not expose cwd. Derive a useful root
+	// from pane metadata, then prefer an explicit worktree checkout when Herdr
+	// reports one.
+	roots := make(map[string]string, len(workspaces))
+	if panes, paneErr := h.listHerdrPanes(); paneErr == nil {
+		for _, pane := range panes {
+			root := herdrPaneRoot(pane)
+			if root == "" {
+				continue
+			}
+			if roots[pane.WorkspaceID] == "" || pane.Focused {
+				roots[pane.WorkspaceID] = root
+			}
+		}
+	}
+	for _, workspace := range workspaces {
+		if workspace.Worktree != nil {
+			if root := strings.TrimSpace(workspace.Worktree.CheckoutPath); root != "" {
+				roots[workspace.WorkspaceID] = root
+			}
+		}
+	}
+
+	h.workspaceTargets = make(map[string]string, len(workspaces)*3)
 	sessions := make([]session, 0, len(workspaces))
 	for _, workspace := range workspaces {
-		name := workspaceDisplayName(workspace)
-		if counts[name] > 1 {
-			name = fmt.Sprintf("%s [%s]", name, workspace.WorkspaceID)
+		baseName := workspaceDisplayName(workspace)
+		displayName := baseName
+		if counts[baseName] > 1 {
+			displayName = fmt.Sprintf("%s [%s]", baseName, workspace.WorkspaceID)
 		}
-		h.workspaceTargets[name] = workspace.WorkspaceID
+
+		// Workspace ids are the state/switching identity. Labels are mutable
+		// presentation text and may collide.
+		h.workspaceTargets[workspace.WorkspaceID] = workspace.WorkspaceID
+		h.workspaceTargets[displayName] = workspace.WorkspaceID
+		if counts[baseName] == 1 {
+			h.workspaceTargets[baseName] = workspace.WorkspaceID
+		}
 		sessions = append(sessions, session{
-			Name:     name,
-			Attached: workspace.Focused,
-			RootDir:  workspace.CWD,
+			Name:        workspace.WorkspaceID,
+			DisplayName: displayName,
+			LegacyName:  baseName,
+			Attached:    workspace.Focused,
+			RootDir:     roots[workspace.WorkspaceID],
 		})
 	}
 	return sessions, nil
@@ -210,21 +247,22 @@ func (h *herdrCLI) ListPanes() ([]paneInfo, error) {
 		tabs[tab.TabID] = tab
 	}
 
-	var paneResult struct {
-		Panes []herdrPane `json:"panes"`
-	}
-	if err := h.call("pane.list", map[string]any{}, &paneResult); err != nil {
-		return nil, fmt.Errorf("list herdr panes: %w", err)
+	paneResult, err := h.listHerdrPanes()
+	if err != nil {
+		return nil, err
 	}
 
-	panes := make([]paneInfo, 0, len(paneResult.Panes))
-	for _, pane := range paneResult.Panes {
+	panes := make([]paneInfo, 0, len(paneResult))
+	for _, pane := range paneResult {
 		tab := tabs[pane.TabID]
 		windowName := strings.TrimSpace(tab.Label)
 		if windowName == "" {
 			windowName = pane.TabID
 		}
-		panePID, _ := h.paneShellPID(pane.PaneID)
+		panePID, err := h.paneShellPID(pane.PaneID)
+		if err != nil {
+			return nil, fmt.Errorf("herdr pane %s process info: %w", pane.PaneID, err)
+		}
 		panes = append(panes, paneInfo{
 			SessionName: workspaceName(workspaceNames, pane.WorkspaceID),
 			WindowIndex: herdrIndex(tab.Number, pane.TabID, ":t"),
@@ -258,6 +296,23 @@ func (h *herdrCLI) listWorkspaces() ([]herdrWorkspace, error) {
 	return out.Workspaces, nil
 }
 
+func (h *herdrCLI) listHerdrPanes() ([]herdrPane, error) {
+	var out struct {
+		Panes []herdrPane `json:"panes"`
+	}
+	if err := h.call("pane.list", map[string]any{}, &out); err != nil {
+		return nil, fmt.Errorf("list herdr panes: %w", err)
+	}
+	return out.Panes, nil
+}
+
+func herdrPaneRoot(pane herdrPane) string {
+	if cwd := strings.TrimSpace(pane.ForegroundCWD); cwd != "" {
+		return cwd
+	}
+	return strings.TrimSpace(pane.CWD)
+}
+
 func (h *herdrCLI) resolveWorkspace(name string) (string, error) {
 	if target := h.workspaceTargets[name]; target != "" {
 		return target, nil
@@ -279,13 +334,16 @@ func (h *herdrCLI) resolveWorkspace(name string) (string, error) {
 func (h *herdrCLI) paneShellPID(paneID string) (int, error) {
 	var out struct {
 		ProcessInfo struct {
-			ShellPID int `json:"shell_pid"`
+			ShellPID *int `json:"shell_pid"`
 		} `json:"process_info"`
 	}
 	if err := h.call("pane.process_info", map[string]any{"pane_id": paneID}, &out); err != nil {
 		return 0, err
 	}
-	return out.ProcessInfo.ShellPID, nil
+	if out.ProcessInfo.ShellPID == nil || *out.ProcessInfo.ShellPID <= 0 {
+		return 0, nil
+	}
+	return *out.ProcessInfo.ShellPID, nil
 }
 
 func (h *herdrCLI) call(method string, params any, out any) error {
