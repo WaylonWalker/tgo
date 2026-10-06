@@ -11,12 +11,24 @@ import (
 const tmuxFieldSeparator = "\t"
 
 type session struct {
-	Name     string
-	Attached bool
-	RootDir  string
+	// Name is the stable state/switching key. For tmux it is also the visible
+	// session name; backends with mutable labels can provide DisplayName.
+	Name        string
+	DisplayName string
+	LegacyName  string
+	Attached    bool
+	RootDir     string
+}
+
+func (s session) Label() string {
+	if name := strings.TrimSpace(s.DisplayName); name != "" {
+		return name
+	}
+	return s.Name
 }
 
 type tmuxClient interface {
+	BackendName() string
 	ListSessions() ([]session, error)
 	SwitchSession(name string) error
 	KillSession(name string) error
