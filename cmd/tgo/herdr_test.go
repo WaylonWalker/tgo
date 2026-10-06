@@ -131,12 +131,18 @@ func TestHerdrListPanesAndFocus(t *testing.T) {
 func TestTmuxFacadeRoutesToHerdr(t *testing.T) {
 	h := newHerdrCLI("/tmp/herdr.sock")
 	h.callFn = func(method string, params any, out any) error {
-		if method != "workspace.list" {
+		switch method {
+		case "workspace.list":
+			writeHerdrResult(t, out, map[string]any{"workspaces": []map[string]any{
+				{"workspace_id": "w1", "label": "dev", "focused": true, "number": 1},
+			}})
+		case "pane.list":
+			writeHerdrResult(t, out, map[string]any{"panes": []map[string]any{{
+				"pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1", "cwd": "/src/dev",
+			}}})
+		default:
 			t.Fatalf("unexpected method %q", method)
 		}
-		writeHerdrResult(t, out, map[string]any{"workspaces": []map[string]any{
-			{"workspace_id": "w1", "label": "dev", "cwd": "/src/dev", "focused": true, "number": 1},
-		}})
 		return nil
 	}
 	client := &tmuxCLI{backend: h, backendDetected: true}
