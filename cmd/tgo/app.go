@@ -621,11 +621,16 @@ func migrateSessionStateKeys(st state, sessions []session) state {
 	aliases := make(map[string][]string)
 	for _, session := range sessions {
 		existing[session.Name] = struct{}{}
+		seenAliases := map[string]struct{}{}
 		for _, alias := range []string{session.DisplayName, session.LegacyName} {
 			alias = strings.TrimSpace(alias)
 			if alias == "" || alias == session.Name {
 				continue
 			}
+			if _, seen := seenAliases[alias]; seen {
+				continue
+			}
+			seenAliases[alias] = struct{}{}
 			aliases[alias] = append(aliases[alias], session.Name)
 		}
 	}
