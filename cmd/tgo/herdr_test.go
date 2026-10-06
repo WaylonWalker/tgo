@@ -153,7 +153,7 @@ func TestTmuxFacadeRoutesToHerdr(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
-	if len(sessions) != 1 || sessions[0].Name != "dev" {
+	if len(sessions) != 1 || sessions[0].Name != "w1" || sessions[0].Label() != "dev" {
 		t.Fatalf("sessions: %#v", sessions)
 	}
 }
