@@ -166,7 +166,7 @@ The original JSON payload is retained with the event.
 - tmux: `$XDG_CONFIG_HOME/tgo/state.json` (falls back to `~/.config/tgo/state.json`)
 - Herdr: `$XDG_CONFIG_HOME/tgo/state-herdr.json` (falls back to `~/.config/tgo/state-herdr.json`)
 
-Favorites persist even if a workspace/session is not currently running; missing favorites are recreated using the saved root directory.
+tmux favorites persist even if a session is not currently running; missing tmux favorites are recreated using the saved root directory. Herdr favorites are keyed by stable workspace ID while that workspace exists, so duplicate or renamed labels do not change the favorite. A closed Herdr workspace is not auto-recreated because Herdr assigns a new workspace ID on creation.
 
 Agent lifecycle data is stored atomically in:
 
