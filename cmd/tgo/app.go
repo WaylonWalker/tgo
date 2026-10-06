@@ -498,17 +498,21 @@ func (a *app) toggleFavorite() {
 		return
 	}
 
+	label := name
+	if s, ok := a.findSessionByName(name); ok {
+		label = s.Label()
+	}
 	idx := indexOf(a.state.Favorites, name)
 	if idx >= 0 {
 		a.state.Favorites = removeAt(a.state.Favorites, idx)
 		delete(a.state.FavoriteRoots, name)
-		a.setStatus(fmt.Sprintf("unfavorited %s", name))
+		a.setStatus(fmt.Sprintf("unfavorited %s", label))
 	} else {
 		a.state.Favorites = append(a.state.Favorites, name)
 		if s, ok := a.findSessionByName(name); ok && s.RootDir != "" {
 			a.state.FavoriteRoots[name] = s.RootDir
 		}
-		a.setStatus(fmt.Sprintf("favorited %s", name))
+		a.setStatus(fmt.Sprintf("favorited %s", label))
 	}
 	if err := a.persistAndRebuild(); err != nil {
 		a.setError(err)
@@ -560,6 +564,10 @@ func (a *app) killSelected() {
 	if !ok {
 		return
 	}
+	label := name
+	if s, ok := a.findSessionByName(name); ok {
+		label = s.Label()
+	}
 	if err := a.client.KillSession(name); err != nil {
 		a.setError(err)
 		return
@@ -570,7 +578,7 @@ func (a *app) killSelected() {
 		a.setError(err)
 		return
 	}
-	a.setStatus(fmt.Sprintf("killed %s", name))
+	a.setStatus(fmt.Sprintf("killed %s", label))
 }
 
 func (a *app) refreshSessions() error {
@@ -581,6 +589,7 @@ func (a *app) refreshSessions() error {
 	if err != nil {
 		return err
 	}
+	a.state = migrateSessionStateKeys(a.state, sessions)
 	sessions, err = a.ensureFavoriteSessions(sessions)
 	if err != nil {
 		return err
@@ -607,6 +616,56 @@ func (a *app) rebuildLists() {
 	a.clampCursors()
 }
 
+func migrateSessionStateKeys(st state, sessions []session) state {
+	existing := make(map[string]struct{}, len(sessions))
+	aliases := make(map[string][]string)
+	for _, session := range sessions {
+		existing[session.Name] = struct{}{}
+		seenAliases := map[string]struct{}{}
+		for _, alias := range []string{session.DisplayName, session.LegacyName} {
+			alias = strings.TrimSpace(alias)
+			if alias == "" || alias == session.Name {
+				continue
+			}
+			if _, seen := seenAliases[alias]; seen {
+				continue
+			}
+			seenAliases[alias] = struct{}{}
+			aliases[alias] = append(aliases[alias], session.Name)
+		}
+	}
+
+	remap := func(name string) string {
+		if _, ok := existing[name]; ok {
+			return name
+		}
+		keys := aliases[name]
+		if len(keys) == 1 {
+			return keys[0]
+		}
+		// Leave ambiguous old labels unresolved rather than guessing.
+		return name
+	}
+
+	for i, name := range st.Favorites {
+		st.Favorites[i] = remap(name)
+	}
+	for i, name := range st.Order {
+		st.Order[i] = remap(name)
+	}
+	if st.FavoriteRoots != nil {
+		roots := make(map[string]string, len(st.FavoriteRoots))
+		for name, root := range st.FavoriteRoots {
+			key := remap(name)
+			if roots[key] == "" {
+				roots[key] = root
+			}
+		}
+		st.FavoriteRoots = roots
+	}
+	return st
+}
+
 func (a *app) ensureFavoriteSessions(sessions []session) ([]session, error) {
 	exists := make(map[string]struct{}, len(sessions))
 	for _, s := range sessions {
@@ -614,6 +673,13 @@ func (a *app) ensureFavoriteSessions(sessions []session) ([]session, error) {
 		if s.RootDir != "" && a.state.FavoriteRoots[s.Name] == "" {
 			a.state.FavoriteRoots[s.Name] = s.RootDir
 		}
+	}
+	// tmux names can be recreated under the same durable key. Herdr workspace
+	// ids cannot: recreating a closed workspace gives it a new id, so using the
+	// old favorite key would create a phantom workspace and still not resolve
+	// the favorite.
+	if a.client.BackendName() != "tmux" {
+		return sessions, nil
 	}
 	created := false
 	for _, name := range a.state.Favorites {
@@ -801,14 +867,22 @@ func indexSession(sessions []session, name string) int {
 			return i
 		}
 	}
-	return -1
+	match := -1
+	for i, s := range sessions {
+		if s.Label() != name {
+			continue
+		}
+		if match >= 0 {
+			return -1
+		}
+		match = i
+	}
+	return match
 }
 
 func (a *app) findSessionByName(name string) (session, bool) {
-	for _, s := range a.sessions {
-		if s.Name == name {
-			return s, true
-		}
+	if idx := indexSession(a.sessions, name); idx >= 0 {
+		return a.sessions[idx], true
 	}
 	return session{}, false
 }

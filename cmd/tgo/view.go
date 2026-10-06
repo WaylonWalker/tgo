@@ -173,7 +173,7 @@ func (a *app) drawSection(screen tcell.Screen, y int, width int, height int, tit
 			style = style.Foreground(tcell.NewRGBColor(130, 150, 160))
 		}
 
-		row := fmt.Sprintf("%s[%s] %s %s%s%s", prefix, keyLabel, attached, s.Name, keyChangeLabel, actionLabel)
+		row := fmt.Sprintf("%s[%s] %s %s%s%s", prefix, keyLabel, attached, s.Label(), keyChangeLabel, actionLabel)
 		a.drawText(screen, 0, y, style, truncate(row, width))
 		y++
 	}

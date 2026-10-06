@@ -282,7 +282,10 @@ func buildPaneUsage(panes []paneInfo, procs []procStat) []windowUsage {
 
 	rows := make([]windowUsage, 0, len(panes))
 	for _, pane := range panes {
-		totals := accumulateSubtree(pane.PanePID)
+		totals := usageTotals{}
+		if pane.PanePID > 0 {
+			totals = accumulateSubtree(pane.PanePID)
+		}
 		rows = append(rows, windowUsage{
 			Target:        pane.Target(),
 			SessionName:   pane.SessionName,

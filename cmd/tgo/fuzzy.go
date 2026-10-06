@@ -19,14 +19,15 @@ func fuzzyMatch(pattern, text string) bool {
 	return pi == len(pattern)
 }
 
-// filterSessions returns only sessions whose Name fuzzy-matches pattern.
+// filterSessions returns only sessions whose visible label or stable key
+// fuzzy-matches pattern.
 func filterSessions(sessions []session, pattern string) []session {
 	if pattern == "" {
 		return sessions
 	}
 	var result []session
 	for _, s := range sessions {
-		if fuzzyMatch(pattern, s.Name) {
+		if fuzzyMatch(pattern, s.Label()) || fuzzyMatch(pattern, s.Name) {
 			result = append(result, s)
 		}
 	}

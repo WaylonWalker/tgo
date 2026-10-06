@@ -11,12 +11,24 @@ import (
 const tmuxFieldSeparator = "\t"
 
 type session struct {
-	Name     string
-	Attached bool
-	RootDir  string
+	// Name is the stable state/switching key. For tmux it is also the visible
+	// session name; backends with mutable labels can provide DisplayName.
+	Name        string
+	DisplayName string
+	LegacyName  string
+	Attached    bool
+	RootDir     string
+}
+
+func (s session) Label() string {
+	if name := strings.TrimSpace(s.DisplayName); name != "" {
+		return name
+	}
+	return s.Name
 }
 
 type tmuxClient interface {
+	BackendName() string
 	ListSessions() ([]session, error)
 	SwitchSession(name string) error
 	KillSession(name string) error
@@ -24,7 +36,29 @@ type tmuxClient interface {
 	NewSessionAt(name string, rootDir string) error
 }
 
-type tmuxCLI struct{}
+type tmuxCLI struct {
+	backend         multiplexerBackend
+	backendDetected bool
+}
+
+func (t *tmuxCLI) backendClient() multiplexerBackend {
+	if t.backend != nil {
+		return t.backend
+	}
+	if t.backendDetected {
+		return nil
+	}
+	t.backendDetected = true
+	t.backend = detectMultiplexerBackend()
+	return t.backend
+}
+
+func (t *tmuxCLI) BackendName() string {
+	if backend := t.backendClient(); backend != nil {
+		return backend.BackendName()
+	}
+	return "tmux"
+}
 
 type paneInfo struct {
 	SessionName string
@@ -51,6 +85,9 @@ type procStat struct {
 }
 
 func (t *tmuxCLI) ListSessions() ([]session, error) {
+	if backend := t.backendClient(); backend != nil {
+		return backend.ListSessions()
+	}
 	cmd := exec.Command("tmux", "list-sessions", "-F", "#{session_name}|#{?session_attached,1,0}|#{session_path}")
 	out, err := cmd.Output()
 	if err != nil {
@@ -79,6 +116,9 @@ func (t *tmuxCLI) ListSessions() ([]session, error) {
 }
 
 func (t *tmuxCLI) SwitchSession(name string) error {
+	if backend := t.backendClient(); backend != nil {
+		return backend.SwitchSession(name)
+	}
 	if name == "" {
 		return fmt.Errorf("empty session name")
 	}
@@ -108,6 +148,9 @@ func (t *tmuxCLI) SwitchWindow(target string) error {
 }
 
 func (t *tmuxCLI) SwitchPane(target string) error {
+	if backend := t.backendClient(); backend != nil {
+		return backend.SwitchPane(target)
+	}
 	if target == "" {
 		return fmt.Errorf("empty pane target")
 	}
@@ -131,6 +174,9 @@ func (t *tmuxCLI) SwitchPane(target string) error {
 }
 
 func (t *tmuxCLI) KillSession(name string) error {
+	if backend := t.backendClient(); backend != nil {
+		return backend.KillSession(name)
+	}
 	if name == "" {
 		return fmt.Errorf("empty session name")
 	}
@@ -146,6 +192,9 @@ func (t *tmuxCLI) NewSession(name string) error {
 }
 
 func (t *tmuxCLI) NewSessionAt(name string, rootDir string) error {
+	if backend := t.backendClient(); backend != nil {
+		return backend.NewSessionAt(name, rootDir)
+	}
 	if name == "" {
 		return fmt.Errorf("empty session name")
 	}
@@ -161,6 +210,9 @@ func (t *tmuxCLI) NewSessionAt(name string, rootDir string) error {
 }
 
 func (t *tmuxCLI) ListPanes() ([]paneInfo, error) {
+	if backend := t.backendClient(); backend != nil {
+		return backend.ListPanes()
+	}
 	format := strings.Join([]string{
 		"#{session_name}",
 		"#{window_index}",
